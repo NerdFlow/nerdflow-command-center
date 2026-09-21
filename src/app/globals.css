@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f5faf8;
+  --panel: #ffffff;
+  --panel2: #e8f2ee;
+  --ink: #050807;
+  --muted: #42524c;
+  --rule: #d5e3dd;
+  --signal: #087a57;
+  --signal-soft: #d8faed;
+  --go: #087a57;
+  --go-soft: #d8faed;
+  --stop: #b4432f;
+  --stop-soft: #f8e1dc;
+  --accent: #20b982;
+  --accent-hover: #087a57;
+  --accent-soft: #d8faed;
+  --on-accent: #050807;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #050807;
+    --panel: #0b1210;
+    --panel2: #121a17;
+    --ink: #ffffff;
+    --muted: #b8c9c2;
+    --rule: #1d2925;
+    --signal: #72ecc0;
+    --signal-soft: #10251d;
+    --go: #34e0a1;
+    --go-soft: #10251d;
+    --stop: #f08a74;
+    --stop-soft: #2e1712;
+    --accent: #34e0a1;
+    --accent-hover: #20b982;
+    --accent-soft: #10251d;
+    --on-accent: #050807;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #050807;
+  --panel: #0b1210;
+  --panel2: #121a17;
+  --ink: #ffffff;
+  --muted: #b8c9c2;
+  --rule: #1d2925;
+  --signal: #72ecc0;
+  --signal-soft: #10251d;
+  --go: #34e0a1;
+  --go-soft: #10251d;
+  --stop: #f08a74;
+  --stop-soft: #2e1712;
+  --accent: #34e0a1;
+  --accent-hover: #20b982;
+  --accent-soft: #10251d;
+  --on-accent: #050807;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+::selection {
+  background: var(--accent);
+  color: #050807;
+}
+
+@keyframes pulse-orb {
+  50% {
+    box-shadow: 0 0 0 6px var(--accent-soft), 0 0 0 7px var(--accent);
+  }
+}
+.orb-think {
+  animation: pulse-orb 1.2s ease-in-out infinite;
+}

@@ -1,0 +1,717 @@
+// FLOW Sales Command Center — data model per docs/SPEC.md section 4.
+// Phase 1 implements every table; Phase 2+ tables (reviews, conversations,
+// integrations, ai_usage, etc.) exist now so later phases don't need
+// migrations that touch already-shipped screens.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  rep
+  manager
+  admin
+}
+
+enum UserStatus {
+  invited
+  active
+  deactivated
+}
+
+enum TargetMetric {
+  leads_verified
+  emails
+  calls
+  instagram_dms
+  linkedin_messages
+}
+
+enum ProductType {
+  product
+  service
+}
+
+enum ProductStatus {
+  active
+  archived
+}
+
+enum KnowledgeSource {
+  upload
+  paste
+  url
+  auto_learning
+}
+
+enum CampaignStatus {
+  draft
+  pending_approval
+  active
+  paused
+  archived
+}
+
+enum CampaignNoteKind {
+  note
+  system
+  learning
+}
+
+enum LeadSource {
+  google_places
+  open_data
+  apollo
+  openclaw
+  csv
+  manual
+  portfolio_agent
+}
+
+enum LeadStatus {
+  inbox
+  rejected
+  queued
+  in_cadence
+  replied
+  deal
+  not_fit
+  finished
+  do_not_contact
+}
+
+enum EmailVerification {
+  unknown
+  valid
+  risky
+  invalid
+}
+
+enum Channel {
+  email
+  call
+  instagram
+  linkedin
+}
+
+enum TouchOutcome {
+  sent
+  no_answer
+  talked_not_now
+  replied
+  interested
+  not_fit
+}
+
+enum DealStage {
+  interested
+  discovery
+  demo
+  proposal
+  closing
+  won
+  lost
+}
+
+enum LostReason {
+  price
+  timing
+  no_decision
+  competitor
+  not_fit
+  went_silent
+  other
+}
+
+enum ConversationKind {
+  email_out
+  email_in
+  call
+  meeting
+  dm_in
+  dm_out
+  note
+  voice_debrief
+  practice
+}
+
+enum ConversationSource {
+  manual
+  gmail
+  calling_app
+  meet_transcript
+  voice_note
+}
+
+enum ReviewStatus {
+  none
+  queued
+  done
+  failed
+}
+
+enum RepFeedback {
+  helpful
+  wrong
+}
+
+enum CoachingRuleStatus {
+  active
+  kept
+  dropped
+}
+
+enum IntegrationProvider {
+  google
+  gmail
+  calling_app
+  slack
+  openclaw
+}
+
+enum AiFeature {
+  brief
+  review
+  strategy
+  scoring
+  chat
+  roleplay
+  draft_review
+  prep
+  weekly_patterns
+  reply_classification
+  close_out_summary
+}
+
+enum NotificationChannel {
+  in_app
+  slack
+}
+
+// ───────────────────────────── Core ─────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users         User[]
+  targets       Target[]
+  dailyStats    DailyStat[]
+  products      Product[]
+  knowledgeDocs KnowledgeDoc[]
+  campaigns     Campaign[]
+  leads         Lead[]
+  deals         Deal[]
+  conversations Conversation[]
+  coachingRules CoachingRule[]
+  chatThreads   ChatThread[]
+  integrations  Integration[]
+  aiUsage       AiUsage[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  settings      OrgSettings?
+
+  @@map("organizations")
+}
+
+model OrgSettings {
+  id                       String   @id @default(uuid())
+  organizationId           String   @unique @map("organization_id")
+  organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  allowedEmailDomain       String   @map("allowed_email_domain")
+  welcomeMessage           String   @default("") @map("welcome_message")
+  assistantName            String   @default("Flow") @map("assistant_name")
+  campaignLimitPerRep      Int      @default(2) @map("campaign_limit_per_rep")
+  leadDailyCapDefault      Int      @default(30) @map("lead_daily_cap_default")
+  autoPauseTouchThreshold  Int      @default(150) @map("auto_pause_touch_threshold")
+  autoPauseReplyFloorPct   Int      @default(1) @map("auto_pause_reply_floor_pct")
+  autoPauseBounceCeilPct   Int      @default(5) @map("auto_pause_bounce_ceil_pct")
+  emailDraftSavingEnabled  Boolean  @default(false) @map("email_draft_saving_enabled")
+  recordingConsentPolicy   String   @default("Ask the prospect for permission to record before it starts, and only continue if they say yes.") @map("recording_consent_policy")
+  aiMonthlyBudgetUsd       Int      @default(150) @map("ai_monthly_budget_usd")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  @@map("org_settings")
+}
+
+model User {
+  id                     String     @id @default(uuid())
+  organizationId         String     @map("organization_id")
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email                  String     @unique
+  fullName               String     @map("full_name")
+  role                   Role       @default(rep)
+  status                 UserStatus @default(invited)
+  timezone               String     @default("Asia/Karachi")
+  workingHours           Json       @default("{\"start\":\"09:00\",\"end\":\"17:30\",\"days\":[1,2,3,4,5]}") @map("working_hours")
+  onboardingCompletedAt  DateTime?  @map("onboarding_completed_at")
+  onboardingProgress     Json       @default("{}") @map("onboarding_progress")
+  lastLoginAt            DateTime?  @map("last_login_at")
+  sessionsInvalidatedAt  DateTime?  @map("sessions_invalidated_at")
+  assistantName          String?    @map("assistant_name")
+  isDemo                 Boolean    @default(false) @map("is_demo")
+  createdAt              DateTime   @default(now()) @map("created_at")
+  updatedAt              DateTime   @updatedAt @map("updated_at")
+
+  targetsOwned      Target[]        @relation("TargetUser")
+  targetsSet        Target[]        @relation("TargetSetBy")
+  dailyStats        DailyStat[]
+  knowledgeUploads  KnowledgeDoc[]
+  campaignsOwned    Campaign[]      @relation("CampaignOwner")
+  campaignsApproved Campaign[]      @relation("CampaignApprovedBy")
+  campaignNotes     CampaignNote[]
+  leadsOwned        Lead[]          @relation("LeadOwner")
+  leadsApproved     Lead[]          @relation("LeadApprovedBy")
+  touches           Touch[]
+  dealsOwned        Deal[]          @relation("DealOwner")
+  reviewFeedback    Review[]        @relation("ReviewFeedbackBy")
+  coachingRules     CoachingRule[]
+  chatThreads       ChatThread[]
+  integrations      Integration[]
+  aiUsage           AiUsage[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+
+  @@map("users")
+}
+
+model Target {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id")
+  user           User         @relation("TargetUser", fields: [userId], references: [id], onDelete: Cascade)
+  metric         TargetMetric
+  dailyValue     Int          @map("daily_value")
+  effectiveFrom  DateTime     @map("effective_from") @db.Date
+  setById        String       @map("set_by")
+  setBy          User         @relation("TargetSetBy", fields: [setById], references: [id])
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@index([userId, metric, effectiveFrom])
+  @@map("targets")
+}
+
+model DailyStat {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime     @db.Date
+  counts         Json         @default("{}")
+  replies        Int          @default(0)
+  meetingsBooked Int          @default(0) @map("meetings_booked")
+  targetPct      Int?         @map("target_pct")
+  closedOutAt    DateTime?    @map("closed_out_at")
+  blocker        String?
+  learning       String?
+  aiSummary      String?      @map("ai_summary")
+  streakAfter    Int?         @map("streak_after")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@unique([userId, date])
+  @@map("daily_stats")
+}
+
+model Product {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  type           ProductType
+  summary        String
+  status         ProductStatus @default(active)
+  isDemo         Boolean       @default(false) @map("is_demo")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  knowledgeDocs KnowledgeDoc[]
+  campaigns     Campaign[]
+  deals         Deal[]
+
+  @@map("products")
+}
+
+model KnowledgeDoc {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productId      String?         @map("product_id")
+  product        Product?        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  campaignId     String?         @map("campaign_id")
+  campaign       Campaign?       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  title          String
+  source         KnowledgeSource
+  storagePath    String?         @map("storage_path")
+  extractedText  String          @map("extracted_text")
+  tokenEstimate  Int             @default(0) @map("token_estimate")
+  uploadedById   String          @map("uploaded_by")
+  uploadedBy     User            @relation(fields: [uploadedById], references: [id])
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  @@map("knowledge_docs")
+}
+
+model Campaign {
+  id               String         @id @default(uuid())
+  organizationId   String         @map("organization_id")
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productId        String         @map("product_id")
+  product          Product        @relation(fields: [productId], references: [id])
+  name             String
+  ownerId          String         @map("owner_id")
+  owner            User           @relation("CampaignOwner", fields: [ownerId], references: [id])
+  status           CampaignStatus @default(draft)
+  goal             String?
+  location         String?
+  strategy         Json           @default("{}")
+  strategyVersion  Int            @default(1) @map("strategy_version")
+  leadDailyCap     Int            @default(30) @map("lead_daily_cap")
+  approvedById     String?        @map("approved_by")
+  approvedBy       User?          @relation("CampaignApprovedBy", fields: [approvedById], references: [id])
+  approvedAt       DateTime?      @map("approved_at")
+  pausedReason     String?        @map("paused_reason")
+  isDemo           Boolean        @default(false) @map("is_demo")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  notes         CampaignNote[]
+  sourceRuns    LeadSourceRun[]
+  leads         Lead[]
+  deals         Deal[]
+  knowledgeDocs KnowledgeDoc[]
+
+  @@map("campaigns")
+}
+
+model CampaignNote {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  campaignId     String           @map("campaign_id")
+  campaign       Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  authorId       String?          @map("author_id")
+  author         User?            @relation(fields: [authorId], references: [id])
+  kind           CampaignNoteKind @default(note)
+  body           String
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  @@map("campaign_notes")
+}
+
+model LeadSourceRun {
+  id             String     @id @default(uuid())
+  organizationId String     @map("organization_id")
+  campaignId     String     @map("campaign_id")
+  campaign       Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  source         LeadSource
+  startedAt      DateTime   @map("started_at")
+  finishedAt     DateTime?  @map("finished_at")
+  found          Int        @default(0)
+  new            Int        @default(0)
+  duplicates     Int        @default(0)
+  rejectedAuto   Int        @default(0) @map("rejected_auto")
+  error          String?
+  costUsd        Decimal    @default(0) @map("cost_usd") @db.Decimal(10, 2)
+
+  leads Lead[]
+
+  @@map("lead_sources_runs")
+}
+
+model Lead {
+  id                 String             @id @default(uuid())
+  organizationId     String             @map("organization_id")
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaignId         String             @map("campaign_id")
+  campaign           Campaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ownerId            String             @map("owner_id")
+  owner              User               @relation("LeadOwner", fields: [ownerId], references: [id])
+  status             LeadStatus         @default(inbox)
+  businessName       String             @map("business_name")
+  contactName        String?            @map("contact_name")
+  contactRole        String?            @map("contact_role")
+  city               String?
+  region             String?
+  country            String?
+  website            String?
+  phone              String?
+  email              String?
+  instagramUrl       String?            @map("instagram_url")
+  linkedinUrl        String?            @map("linkedin_url")
+  emailVerification  EmailVerification  @default(unknown) @map("email_verification")
+  signals            Json               @default("{}")
+  source             LeadSource
+  sourceUrl          String?            @map("source_url")
+  sourceRunId        String?            @map("source_run_id")
+  sourceRun          LeadSourceRun?     @relation(fields: [sourceRunId], references: [id])
+  fitScore           Int                @default(0) @map("fit_score")
+  fitReasons         String[]           @map("fit_reasons")
+  fitFlags           String[]           @map("fit_flags")
+  dedupeKey          String             @map("dedupe_key")
+  cadenceStep        Int                @default(0) @map("cadence_step")
+  nextTouchAt        DateTime?          @map("next_touch_at")
+  approvedById       String?            @map("approved_by")
+  approvedBy         User?              @relation("LeadApprovedBy", fields: [approvedById], references: [id])
+  rejectedReason     String?            @map("rejected_reason")
+  isDemo             Boolean            @default(false) @map("is_demo")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  touches       Touch[]
+  deals         Deal[]
+  conversations Conversation[]
+
+  @@index([dedupeKey])
+  @@index([ownerId, status, nextTouchAt])
+  @@map("leads")
+}
+
+model Touch {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  leadId         String        @map("lead_id")
+  lead           Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  dealId         String?       @map("deal_id")
+  deal           Deal?         @relation(fields: [dealId], references: [id])
+  userId         String        @map("user_id")
+  user           User          @relation(fields: [userId], references: [id])
+  channel        Channel
+  step           Int
+  outcome        TouchOutcome
+  body           String?
+  externalRef    String?       @map("external_ref")
+  occurredAt     DateTime      @map("occurred_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  @@map("touches")
+}
+
+model Deal {
+  id               String      @id @default(uuid())
+  organizationId   String      @map("organization_id")
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leadId           String      @map("lead_id")
+  lead             Lead        @relation(fields: [leadId], references: [id])
+  ownerId          String      @map("owner_id")
+  owner            User        @relation("DealOwner", fields: [ownerId], references: [id])
+  productId        String      @map("product_id")
+  product          Product     @relation(fields: [productId], references: [id])
+  campaignId       String      @map("campaign_id")
+  campaign         Campaign    @relation(fields: [campaignId], references: [id])
+  stage            DealStage   @default(interested)
+  stageChangedAt   DateTime    @default(now()) @map("stage_changed_at")
+  checklist        Json        @default("{}")
+  nextStepText     String?     @map("next_step_text")
+  nextStepAt       DateTime?   @map("next_step_at")
+  health           Int         @default(60)
+  signals          Json        @default("{}")
+  nextBestAction   String?     @map("next_best_action")
+  valueMonthlyUsd  Decimal?    @map("value_monthly_usd") @db.Decimal(10, 2)
+  lostReason       LostReason? @map("lost_reason")
+  wonAt            DateTime?   @map("won_at")
+  lostAt           DateTime?   @map("lost_at")
+  isDemo           Boolean     @default(false) @map("is_demo")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  people        DealPerson[]
+  touches       Touch[]
+  conversations Conversation[]
+
+  @@index([ownerId, stage])
+  @@map("deals")
+}
+
+model DealPerson {
+  id              String  @id @default(uuid())
+  dealId          String  @map("deal_id")
+  deal            Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  name            String
+  role            String?
+  email           String?
+  phone           String?
+  isDecisionMaker Boolean @default(false) @map("is_decision_maker")
+  met             Boolean @default(false)
+
+  @@map("deal_people")
+}
+
+model Conversation {
+  id                String             @id @default(uuid())
+  organizationId    String             @map("organization_id")
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  dealId            String?            @map("deal_id")
+  deal              Deal?              @relation(fields: [dealId], references: [id])
+  leadId            String?            @map("lead_id")
+  lead              Lead?              @relation(fields: [leadId], references: [id])
+  kind              ConversationKind
+  title             String
+  body              String
+  source            ConversationSource @default(manual)
+  audioPath         String?            @map("audio_path")
+  consentConfirmed  Boolean            @default(false) @map("consent_confirmed")
+  occurredAt        DateTime           @map("occurred_at")
+  reviewStatus      ReviewStatus       @default(none) @map("review_status")
+  createdAt         DateTime           @default(now()) @map("created_at")
+
+  review Review?
+
+  @@map("conversations")
+}
+
+model Review {
+  id              String      @id @default(uuid())
+  conversationId  String      @unique @map("conversation_id")
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  score           Int
+  verdict         String
+  wentWell        String[]    @map("went_well")
+  mistakes        Json        @default("[]")
+  missed          String[]
+  tags            String[]
+  checksMet       String[]    @map("checks_met")
+  suggestedStage  String?     @map("suggested_stage")
+  nextBestAction  String?     @map("next_best_action")
+  suggestedMessage String?    @map("suggested_message")
+  signals         Json        @default("{}")
+  model           String?
+  promptVersion   String?     @map("prompt_version")
+  isBasic         Boolean     @default(true) @map("is_basic")
+  repFeedback     RepFeedback? @map("rep_feedback")
+  repFeedbackById String?     @map("rep_feedback_by")
+  repFeedbackBy   User?       @relation("ReviewFeedbackBy", fields: [repFeedbackById], references: [id])
+  repFeedbackNote String?     @map("rep_feedback_note")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  @@map("reviews")
+}
+
+model CoachingRule {
+  id             String             @id @default(uuid())
+  organizationId String             @map("organization_id")
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String             @map("user_id")
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekStart      DateTime           @map("week_start") @db.Date
+  tag            String
+  ruleText       String             @map("rule_text")
+  createdById    String?            @map("created_by")
+  status         CoachingRuleStatus @default(active)
+  resultNote     String?            @map("result_note")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  @@map("coaching_rules")
+}
+
+model ChatThread {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String       @map("user_id")
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           DateTime     @db.Date
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  messages ChatMessage[]
+
+  @@unique([userId, date])
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id        String     @id @default(uuid())
+  threadId  String     @map("thread_id")
+  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  context   Json       @default("{}")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@map("chat_messages")
+}
+
+model Integration {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?             @map("user_id")
+  user           User?               @relation(fields: [userId], references: [id])
+  provider       IntegrationProvider
+  status         String              @default("disconnected")
+  scopes         String[]
+  encryptedTokens String?            @map("encrypted_tokens")
+  lastSyncAt     DateTime?           @map("last_sync_at")
+  lastError      String?             @map("last_error")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  @@map("integrations")
+}
+
+model AiUsage {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?      @map("user_id")
+  user           User?        @relation(fields: [userId], references: [id])
+  feature        AiFeature
+  model          String
+  inputTokens    Int          @default(0) @map("input_tokens")
+  outputTokens   Int          @default(0) @map("output_tokens")
+  costUsd        Decimal      @default(0) @map("cost_usd") @db.Decimal(10, 4)
+  latencyMs      Int          @default(0) @map("latency_ms")
+  success        Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@map("ai_usage")
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorId        String?      @map("actor_id")
+  actor          User?        @relation(fields: [actorId], references: [id])
+  action         String
+  entityType     String       @map("entity_type")
+  entityId       String?      @map("entity_id")
+  before         Json?
+  after          Json?
+  ip             String?
+  userAgent      String?      @map("user_agent")
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([organizationId, createdAt])
+  @@map("audit_log")
+}
+
+model Notification {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String              @map("user_id")
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           String
+  title          String
+  body           String
+  link           String?
+  readAt         DateTime?           @map("read_at")
+  channel        NotificationChannel @default(in_app)
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  @@map("notifications")
+}
