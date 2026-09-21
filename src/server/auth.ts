@@ -1,12 +1,13 @@
 import { type NextAuthOptions, getServerSession } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { scrypt } from "node:crypto";
+import { promisify } from "node:util";
 import { redirect } from "next/navigation";
 import { prisma } from "@/server/db";
 import { getOrgSettings } from "@/server/settings";
 
 const devLoginEnabled = process.env.ALLOW_DEV_LOGIN === "true";
-const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+const scryptAsync = promisify(scrypt);
 
 async function isEmailAllowed(email: string) {
   const domain = email.split("@")[1]?.toLowerCase();
@@ -22,14 +23,22 @@ export const authOptions: NextAuthOptions = {
     error: "/login",
   },
   providers: [
-    ...(googleConfigured
-      ? [
-          GoogleProvider({
-            clientId: process.env.GOOGLE_CLIENT_ID!,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          }),
-        ]
-      : []),
+    CredentialsProvider({
+      id: "password",
+      name: "Email and password",
+      credentials: { email: { label: "Email", type: "email" }, password: { label: "Password", type: "password" } },
+      async authorize(credentials) {
+        const email = credentials?.email?.toLowerCase().trim();
+        const password = credentials?.password ?? "";
+        if (!email || !password) return null;
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user?.passwordHash || user.status === "deactivated") return null;
+        const [salt, stored] = user.passwordHash.split(":");
+        if (!salt || !stored) return null;
+        const derived = (await scryptAsync(password, salt, 64) as Buffer).toString("hex");
+        return derived === stored ? { id: user.id, email: user.email, name: user.fullName } : null;
+      },
+    }),
     ...(devLoginEnabled
       ? [
           CredentialsProvider({

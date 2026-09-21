@@ -53,8 +53,13 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
   const [pastedMessage, setPastedMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<Channel | "all">("all");
 
-  const current = cards[0];
+  const filteredCards = channelFilter === "all" ? cards : cards.filter((card) => {
+    const cadence = card.campaign.strategy.cadence?.[card.lead.cadenceStep];
+    return (cadence?.channel ?? card.campaign.strategy.channels?.[0]?.channel ?? "email") === channelFilter;
+  });
+  const current = filteredCards[0];
 
   const step = current?.campaign.strategy?.cadence?.[current.lead.cadenceStep];
   const channel: Channel = step?.channel ?? current?.campaign.strategy?.channels?.[0]?.channel ?? "email";
@@ -131,7 +136,16 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
     .map(([k]) => k.replace(/_/g, " "));
 
   return (
-    <div className="grid gap-4 md:[grid-template-columns:1.1fr_1fr]">
+    <>
+      <div className="flex flex-wrap items-center gap-2 mb-4" aria-label="Filter by communication channel">
+        <span className="text-sm font-medium mr-1">Show:</span>
+        {(["all", "call", "email", "instagram", "linkedin"] as const).map((value) => (
+          <button key={value} onClick={() => setChannelFilter(value)} className={`text-sm px-3 py-1.5 rounded-full border ${channelFilter === value ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted"}`}>
+            {value === "all" ? "All" : CHANNEL_LABEL[value]}
+          </button>
+        ))}
+      </div>
+      <div className="grid gap-4 md:[grid-template-columns:1.1fr_1fr]">
       <Panel>
         <div className="mb-2">
           <Chip tone="acc">{current.campaign.productName}</Chip>
@@ -236,6 +250,7 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
           FLOW never sends this for you — copy it into {CHANNEL_LABEL[channel].toLowerCase()} yourself.
         </p>
       </Panel>
-    </div>
+      </div>
+    </>
   );
 }

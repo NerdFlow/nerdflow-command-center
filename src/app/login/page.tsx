@@ -2,14 +2,14 @@ import { prisma } from "@/server/db";
 import { getOrgSettings } from "@/server/settings";
 import { LoginClient } from "@/components/LoginClient";
 
-const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const devLoginEnabled = process.env.ALLOW_DEV_LOGIN === "true";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { error?: string; callbackUrl?: string };
+  searchParams: Promise<{ error?: string; callbackUrl?: string }>;
 }) {
+  const params = await searchParams;
   const settings = await getOrgSettings().catch(() => null);
   const devUsers = devLoginEnabled
     ? await prisma.user.findMany({
@@ -20,9 +20,9 @@ export default async function LoginPage({
     : [];
 
   const errorMessage =
-    searchParams.error === "domain" || searchParams.error === "notinvited" || searchParams.error === "AccessDenied"
+    params.error === "domain" || params.error === "notinvited" || params.error === "AccessDenied"
       ? "This account isn't part of NerdFlow. Ask Muqeet for an invite."
-      : searchParams.error
+      : params.error
         ? "Sign-in failed. Try again."
         : null;
 
@@ -44,10 +44,10 @@ export default async function LoginPage({
         )}
 
         <LoginClient
-          googleConfigured={googleConfigured}
           devLoginEnabled={devLoginEnabled}
           devUsers={devUsers}
-          callbackUrl={searchParams.callbackUrl || "/today"}
+          domain={settings?.allowedEmailDomain ?? "nerdflow.com"}
+          callbackUrl={params.callbackUrl || "/today"}
         />
       </div>
     </div>
