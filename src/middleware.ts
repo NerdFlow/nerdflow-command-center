@@ -9,6 +9,7 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isPublic =
     pathname === "/login" ||
+    pathname === "/signup" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/ingest") ||
     pathname.startsWith("/_next") ||

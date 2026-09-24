@@ -51,6 +51,12 @@ export function AppShell({
           <div className="text-xs text-muted mb-2">{user.role}</div>
           <ThemeToggle />
           <Link
+            href="/account"
+            className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
+          >
+            Change password
+          </Link>
+          <Link
             href="/onboarding"
             className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
           >

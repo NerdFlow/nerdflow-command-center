@@ -1,9 +1,5 @@
-import { prisma } from "@/server/db";
 import { getOrgSettings } from "@/server/settings";
 import { LoginClient } from "@/components/LoginClient";
-
-const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-const devLoginEnabled = process.env.ALLOW_DEV_LOGIN === "true";
 
 export default async function LoginPage({
   searchParams,
@@ -11,20 +7,15 @@ export default async function LoginPage({
   searchParams: { error?: string; callbackUrl?: string };
 }) {
   const settings = await getOrgSettings().catch(() => null);
-  const devUsers = devLoginEnabled
-    ? await prisma.user.findMany({
-        where: { status: { in: ["invited", "active"] } },
-        orderBy: { role: "asc" },
-        select: { email: true, fullName: true, role: true, status: true },
-      })
-    : [];
 
   const errorMessage =
     searchParams.error === "domain" || searchParams.error === "notinvited" || searchParams.error === "AccessDenied"
-      ? "This account isn't part of NerdFlow. Ask Muqeet for an invite."
-      : searchParams.error
-        ? "Sign-in failed. Try again."
-        : null;
+      ? "This account isn't part of NerdFlow. Ask Muqeet for an invite, or sign up with your @nerdflow.tech email."
+      : searchParams.error === "CredentialsSignin"
+        ? "Wrong email or password."
+        : searchParams.error
+          ? "Sign-in failed. Try again."
+          : null;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg px-4">
@@ -43,12 +34,7 @@ export default async function LoginPage({
           </div>
         )}
 
-        <LoginClient
-          googleConfigured={googleConfigured}
-          devLoginEnabled={devLoginEnabled}
-          devUsers={devUsers}
-          callbackUrl={searchParams.callbackUrl || "/today"}
-        />
+        <LoginClient callbackUrl={searchParams.callbackUrl || "/today"} allowedDomain={settings?.allowedEmailDomain ?? "nerdflow.tech"} />
       </div>
     </div>
   );

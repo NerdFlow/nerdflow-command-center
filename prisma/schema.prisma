@@ -249,6 +249,7 @@ model User {
   organizationId         String     @map("organization_id")
   organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   email                  String     @unique
+  passwordHash           String?    @map("password_hash")
   fullName               String     @map("full_name")
   role                   Role       @default(rep)
   status                 UserStatus @default(invited)

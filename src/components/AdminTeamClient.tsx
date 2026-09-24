@@ -26,6 +26,8 @@ export function AdminTeamClient({ users }: { users: TeamUser[] }) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState({ email: "", fullName: "", role: "rep" as Role });
   const [busy, setBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [lastTempPassword, setLastTempPassword] = useState<{ email: string; password: string } | null>(null);
 
   function refresh() {
     router.refresh();
@@ -67,21 +69,42 @@ export function AdminTeamClient({ users }: { users: TeamUser[] }) {
               ))}
             </select>
           </div>
+          {inviteError && <p className="text-sm text-stop mb-2">{inviteError}</p>}
           <Btn
             size="sm"
             variant="primary"
             disabled={!invite.email || !invite.fullName || busy}
             onClick={async () => {
               setBusy(true);
-              await inviteUser(invite);
-              setInvite({ email: "", fullName: "", role: "rep" });
-              setInviteOpen(false);
-              setBusy(false);
-              refresh();
+              setInviteError(null);
+              try {
+                const { tempPassword } = await inviteUser(invite);
+                setLastTempPassword({ email: invite.email, password: tempPassword });
+                setInvite({ email: "", fullName: "", role: "rep" });
+                setInviteOpen(false);
+                refresh();
+              } catch (e) {
+                setInviteError(e instanceof Error ? e.message : "Couldn't create that account.");
+              } finally {
+                setBusy(false);
+              }
             }}
           >
-            Send invite
+            Create account
           </Btn>
+        </Panel>
+      )}
+
+      {lastTempPassword && (
+        <Panel className="mb-4 bg-accent-soft">
+          <p className="text-sm">
+            Account created for <b>{lastTempPassword.email}</b>. Temporary password (shown once — send it to them
+            directly, not through a shared channel):
+          </p>
+          <p className="font-mono text-sm mt-1 mb-2">{lastTempPassword.password}</p>
+          <button className="text-xs text-muted hover:text-ink" onClick={() => setLastTempPassword(null)}>
+            Dismiss
+          </button>
         </Panel>
       )}
 

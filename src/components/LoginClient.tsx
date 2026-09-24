@@ -1,75 +1,66 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+import Link from "next/link";
 import { useState } from "react";
 import { Btn } from "@/components/ui";
 
-type DevUser = { email: string; fullName: string; role: string; status: string };
+export function LoginClient({ callbackUrl, allowedDomain }: { callbackUrl: string; allowedDomain: string }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-export function LoginClient({
-  googleConfigured,
-  devLoginEnabled,
-  devUsers,
-  callbackUrl,
-}: {
-  googleConfigured: boolean;
-  devLoginEnabled: boolean;
-  devUsers: DevUser[];
-  callbackUrl: string;
-}) {
-  const [loading, setLoading] = useState<string | null>(null);
+  async function submit() {
+    setSubmitting(true);
+    setError(null);
+    const res = await signIn("credentials", { email, password, callbackUrl, redirect: false });
+    if (res?.error) {
+      setSubmitting(false);
+      setError("Wrong email or password.");
+      return;
+    }
+    window.location.href = res?.url || callbackUrl;
+  }
 
   return (
     <div className="space-y-4">
-      {googleConfigured && (
-        <Btn
-          variant="primary"
-          className="w-full justify-center flex items-center gap-2"
-          onClick={() => {
-            setLoading("google");
-            signIn("google", { callbackUrl });
-          }}
-          disabled={loading !== null}
-        >
-          {loading === "google" ? "Redirecting…" : "Continue with Google"}
-        </Btn>
-      )}
+      <div className="space-y-3">
+        <label className="block text-sm">
+          Email
+          <input
+            type="email"
+            className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1"
+            placeholder={`you@${allowedDomain}`}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+        </label>
+        <label className="block text-sm">
+          Password
+          <input
+            type="password"
+            className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+        </label>
+      </div>
 
-      {!googleConfigured && !devLoginEnabled && (
-        <p className="text-sm text-muted text-center">
-          No sign-in method is configured yet. Set GOOGLE_CLIENT_ID/SECRET or ALLOW_DEV_LOGIN in .env.local.
-        </p>
-      )}
+      {error && <p className="text-sm text-stop">{error}</p>}
 
-      {devLoginEnabled && (
-        <div className="border border-rule rounded-card p-4 bg-panel">
-          <p className="text-xs text-muted mb-3">
-            Dev login — stands in for Google sign-in until real OAuth is wired up. Pick a seeded user:
-          </p>
-          <div className="space-y-2">
-            {devUsers.length === 0 && (
-              <p className="text-sm text-muted">No users seeded yet. Run `npm run seed`.</p>
-            )}
-            {devUsers.map((u) => (
-              <button
-                key={u.email}
-                disabled={loading !== null}
-                onClick={() => {
-                  setLoading(u.email);
-                  signIn("dev-login", { email: u.email, callbackUrl });
-                }}
-                className="w-full text-left border border-rule rounded-lg px-3 py-2 hover:border-accent bg-bg disabled:opacity-55"
-              >
-                <div className="font-medium text-sm">{u.fullName}</div>
-                <div className="text-xs text-muted">
-                  {u.email} · {u.role}
-                  {u.status === "invited" ? " · not yet signed in" : ""}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <Btn variant="primary" className="w-full justify-center" disabled={!email || !password || submitting} onClick={submit}>
+        {submitting ? "Signing in…" : "Sign in"}
+      </Btn>
+
+      <p className="text-sm text-muted text-center">
+        New to NerdFlow?{" "}
+        <Link href="/signup" className="text-accent font-medium">
+          Create an account
+        </Link>
+      </p>
     </div>
   );
 }
