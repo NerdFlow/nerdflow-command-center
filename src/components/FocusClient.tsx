@@ -45,16 +45,38 @@ function outcomesFor(channel: Channel): { key: string; outcome: TouchOutcome; la
   ];
 }
 
+function cardChannel(card: Card): Channel {
+  const step = card.campaign.strategy?.cadence?.[card.lead.cadenceStep];
+  return step?.channel ?? card.campaign.strategy?.channels?.[0]?.channel ?? "email";
+}
+
+const CHANNEL_FILTERS: Channel[] = ["call", "email", "instagram", "linkedin"];
+
 export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: string }) {
   const router = useRouter();
   const [cards, setCards] = useState(initialCards);
+  const [channelFilter, setChannelFilter] = useState<Channel | "all">("all");
   const [draft, setDraft] = useState("");
   const [pastedOutcome, setPastedOutcome] = useState<TouchOutcome | null>(null);
   const [pastedMessage, setPastedMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const current = cards[0];
+  const countByChannel = useMemo(() => {
+    const counts: Partial<Record<Channel, number>> = {};
+    for (const c of cards) {
+      const ch = cardChannel(c);
+      counts[ch] = (counts[ch] ?? 0) + 1;
+    }
+    return counts;
+  }, [cards]);
+
+  const visibleCards = useMemo(
+    () => (channelFilter === "all" ? cards : cards.filter((c) => cardChannel(c) === channelFilter)),
+    [cards, channelFilter],
+  );
+
+  const current = visibleCards[0];
 
   const step = current?.campaign.strategy?.cadence?.[current.lead.cadenceStep];
   const channel: Channel = step?.channel ?? current?.campaign.strategy?.channels?.[0]?.channel ?? "email";
@@ -88,9 +110,14 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
   }, [current, outcomes, pastedOutcome, draft]);
 
   function skip() {
+    if (!current) return;
     setCards((prev) => {
-      const [first, ...rest] = prev;
-      return first ? [...rest, first] : prev;
+      const idx = prev.findIndex((c) => c.lead.id === current.lead.id);
+      if (idx === -1) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(idx, 1);
+      if (item) copy.push(item);
+      return copy;
     });
   }
 
@@ -112,17 +139,53 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
     setBusy(false);
     setPastedOutcome(null);
     setPastedMessage("");
-    setCards((prev) => prev.slice(1));
+    const doneLeadId = current.lead.id;
+    setCards((prev) => prev.filter((c) => c.lead.id !== doneLeadId));
     if (outcome === "interested" && res.dealId) {
       router.refresh();
     }
   }
 
+  const totalCount = cards.length;
+  const filterBar = (
+    <div className="flex flex-wrap gap-1.5 mb-4">
+      <button
+        onClick={() => setChannelFilter("all")}
+        className={
+          "text-xs px-2.5 py-1 rounded-full border " +
+          (channelFilter === "all" ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted hover:text-ink")
+        }
+      >
+        All ({totalCount})
+      </button>
+      {CHANNEL_FILTERS.map((ch) => (
+        <button
+          key={ch}
+          onClick={() => setChannelFilter(ch)}
+          disabled={!countByChannel[ch]}
+          className={
+            "text-xs px-2.5 py-1 rounded-full border disabled:opacity-40 " +
+            (channelFilter === ch ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted hover:text-ink")
+          }
+        >
+          {CHANNEL_LABEL[ch]} ({countByChannel[ch] ?? 0})
+        </button>
+      ))}
+    </div>
+  );
+
   if (!current) {
     return (
-      <Panel>
-        <p className="text-muted">Nothing left in your queue. Nice work — check back after the next lead engine run.</p>
-      </Panel>
+      <div>
+        {filterBar}
+        <Panel>
+          <p className="text-muted">
+            {channelFilter === "all"
+              ? "Nothing left in your queue. Nice work — check back after the next lead engine run."
+              : `No ${CHANNEL_LABEL[channelFilter].toLowerCase()} leads queued right now — try a different filter above.`}
+          </p>
+        </Panel>
+      </div>
     );
   }
 
@@ -131,7 +194,9 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
     .map(([k]) => k.replace(/_/g, " "));
 
   return (
-    <div className="grid gap-4 md:[grid-template-columns:1.1fr_1fr]">
+    <div>
+      {filterBar}
+      <div className="grid gap-4 md:[grid-template-columns:1.1fr_1fr]">
       <Panel>
         <div className="mb-2">
           <Chip tone="acc">{current.campaign.productName}</Chip>
@@ -236,6 +301,7 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
           FLOW never sends this for you — copy it into {CHANNEL_LABEL[channel].toLowerCase()} yourself.
         </p>
       </Panel>
+      </div>
     </div>
   );
 }

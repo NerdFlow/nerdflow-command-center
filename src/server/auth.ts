@@ -1,19 +1,8 @@
 import { type NextAuthOptions, getServerSession } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { redirect } from "next/navigation";
+import bcrypt from "bcryptjs";
 import { prisma } from "@/server/db";
-import { getOrgSettings } from "@/server/settings";
-
-const devLoginEnabled = process.env.ALLOW_DEV_LOGIN === "true";
-const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-
-async function isEmailAllowed(email: string) {
-  const domain = email.split("@")[1]?.toLowerCase();
-  const settings = await getOrgSettings();
-  const allowed = (settings?.allowedEmailDomain || process.env.ALLOWED_EMAIL_DOMAIN || "").toLowerCase();
-  return Boolean(domain && allowed && domain === allowed);
-}
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
@@ -22,40 +11,31 @@ export const authOptions: NextAuthOptions = {
     error: "/login",
   },
   providers: [
-    ...(googleConfigured
-      ? [
-          GoogleProvider({
-            clientId: process.env.GOOGLE_CLIENT_ID!,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          }),
-        ]
-      : []),
-    ...(devLoginEnabled
-      ? [
-          CredentialsProvider({
-            id: "dev-login",
-            name: "Dev login",
-            credentials: { email: { label: "Email", type: "text" } },
-            async authorize(credentials) {
-              const email = credentials?.email?.toLowerCase().trim();
-              if (!email) return null;
-              const user = await prisma.user.findUnique({ where: { email } });
-              if (!user || user.status === "deactivated") return null;
-              return { id: user.id, email: user.email, name: user.fullName };
-            },
-          }),
-        ]
-      : []),
+    CredentialsProvider({
+      id: "credentials",
+      name: "Email and password",
+      credentials: {
+        email: { label: "Email", type: "text" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        const email = credentials?.email?.toLowerCase().trim();
+        const password = credentials?.password;
+        if (!email || !password) return null;
+
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user || user.status === "deactivated" || !user.passwordHash) return null;
+
+        const valid = await bcrypt.compare(password, user.passwordHash);
+        if (!valid) return null;
+
+        return { id: user.id, email: user.email, name: user.fullName };
+      },
+    }),
   ],
   callbacks: {
-    async signIn({ user, account }) {
+    async signIn({ user }) {
       if (!user.email) return false;
-      const isDevLogin = account?.provider === "dev-login";
-
-      if (!isDevLogin) {
-        const allowed = await isEmailAllowed(user.email);
-        if (!allowed) return "/login?error=domain";
-      }
 
       const dbUser = await prisma.user.findUnique({ where: { email: user.email } });
       if (!dbUser || dbUser.status === "deactivated") return "/login?error=notinvited";

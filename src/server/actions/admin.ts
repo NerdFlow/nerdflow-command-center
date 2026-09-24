@@ -5,19 +5,32 @@ import { requireRole } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
 import { getDefaultOrgId } from "@/server/org";
+import { getOrgSettings } from "@/server/settings";
+import { generateTempPassword, hashPassword } from "@/server/password";
 import type { Role, TargetMetric } from "@prisma/client";
 
 export async function inviteUser(input: { email: string; fullName: string; role: Role }) {
   const admin = await requireRole(["admin"]);
   const organizationId = await getDefaultOrgId();
+  const settings = await getOrgSettings();
+
+  const email = input.email.toLowerCase().trim();
+  const domain = email.split("@")[1];
+  if (!domain || domain !== settings.allowedEmailDomain.toLowerCase()) {
+    throw new Error(`Only @${settings.allowedEmailDomain} email addresses can be invited.`);
+  }
+
+  const tempPassword = generateTempPassword();
+  const passwordHash = await hashPassword(tempPassword);
 
   const user = await prisma.user.create({
     data: {
       organizationId,
-      email: input.email.toLowerCase().trim(),
+      email,
       fullName: input.fullName,
       role: input.role,
       status: "invited",
+      passwordHash,
     },
   });
   await writeAuditLog({
@@ -29,7 +42,7 @@ export async function inviteUser(input: { email: string; fullName: string; role:
     after: { email: user.email, role: user.role },
   });
   revalidatePath("/admin/team");
-  return user;
+  return { user, tempPassword };
 }
 
 export async function changeUserRole(userId: string, role: Role) {
