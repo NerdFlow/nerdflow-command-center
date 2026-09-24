@@ -80,9 +80,9 @@ Clone the repo to `/var/www/products/salesAI` on the VPS. The database is Supaba
 
 1. Copy `.env.example` to `.env` and fill in the Supabase Prisma URLs, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=https://sales.nerdflow.cloud`, `NEXT_PUBLIC_APP_URL=https://sales.nerdflow.cloud`, `AI_PROVIDER=gemini`, and `GEMINI_API_KEY`.
 2. `npm ci && npx prisma migrate deploy && npm run seed && npm run build`
-3. `sudo cp deploy/salesai.service /etc/systemd/system/salesai.service && sudo systemctl enable --now salesai`
+3. Install `/etc/systemd/system/salesai.service` so it runs `npm run start -- --hostname 127.0.0.1 --port 3010` from that directory, then `sudo systemctl enable --now salesai`.
 
-The service runs `next start` on `127.0.0.1:3010`. Nginx proxies `sales.nerdflow.cloud` to that port. After a later `git pull`, run `npm ci`, `npx prisma migrate deploy`, `npm run build`, then `sudo systemctl restart salesai`.
+The service listens on `127.0.0.1:3010`. Nginx proxies `sales.nerdflow.cloud` to that port. A push to `main` SSHes to the VPS, pulls, migrates, rebuilds, and restarts `salesai`. GitHub secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
 
 ## Docs carried over from the build kit
 

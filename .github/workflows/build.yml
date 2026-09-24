@@ -1,12 +1,12 @@
-name: Build
+name: Deploy
 
 on:
   push:
     branches: [main]
 
 concurrency:
-  group: build-main
-  cancel-in-progress: true
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -23,7 +23,7 @@ jobs:
 
       - name: Build
         env:
-          # Confirms main compiles. The server build uses the .env on the VPS.
+          # Confirms main compiles. The VPS build uses the .env already on the server.
           DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
           DIRECT_URL: postgresql://build:build@127.0.0.1:5432/build
           NEXT_PUBLIC_APP_URL: https://sales.nerdflow.cloud
@@ -33,3 +33,30 @@ jobs:
         run: |
           npx prisma generate
           npm run build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -eu
+            cd /var/www/products/salesAI
+            git fetch origin main
+            git reset --hard origin/main
+            npm ci
+            npx prisma migrate deploy
+            npm run build
+            if [ "$(id -u)" -eq 0 ]; then
+              systemctl restart salesai
+            else
+              sudo systemctl restart salesai
+            fi
+            systemctl is-active salesai || sudo systemctl is-active salesai
