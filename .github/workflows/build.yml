@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: build-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        env:
+          # Confirms main compiles. The server build uses the .env on the VPS.
+          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
+          DIRECT_URL: postgresql://build:build@127.0.0.1:5432/build
+          NEXT_PUBLIC_APP_URL: https://sales.nerdflow.cloud
+          NEXTAUTH_URL: https://sales.nerdflow.cloud
+          NEXTAUTH_SECRET: ci-build-placeholder
+          AI_PROVIDER: gemini
+        run: |
+          npx prisma generate
+          npm run build

@@ -40,8 +40,8 @@ export default async function AdminAiPage() {
       {!isAiEnabled() && (
         <Panel>
           <p className="text-sm text-muted">
-            ANTHROPIC_API_KEY isn&apos;t set — every AI feature is running its rule-based fallback right now, so
-            there&apos;s no usage to show yet.
+            No Gemini or Claude API key is set — every AI feature is running its rule-based fallback right now, so
+            there&apos;s no usage to show yet. Set GEMINI_API_KEY and AI_PROVIDER=gemini to turn Gemini on.
           </p>
         </Panel>
       )}

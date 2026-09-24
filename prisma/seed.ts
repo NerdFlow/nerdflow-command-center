@@ -1,6 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Role } from "@prisma/client";
 import type { CampaignStrategy } from "../src/server/strategy";
 import { computeDedupeKey } from "../src/server/leads";
+import { hashPassword } from "../src/server/password";
 
 const prisma = new PrismaClient();
 
@@ -89,41 +90,41 @@ async function main() {
     },
   });
 
-  const muqeet = await prisma.user.upsert({
-    where: { email: `muqeet@${DOMAIN}` },
-    update: {},
-    create: {
-      organizationId: org.id,
-      email: `muqeet@${DOMAIN}`,
-      fullName: "Muqeet",
-      role: "admin",
-      status: "invited",
-    },
-  });
+  const seededLogins: { name: string; email: string; role: Role; password: string | null }[] = [];
 
-  const hadi = await prisma.user.upsert({
-    where: { email: `hadi@${DOMAIN}` },
-    update: {},
-    create: {
-      organizationId: org.id,
-      email: `hadi@${DOMAIN}`,
-      fullName: "Hadi",
-      role: "manager",
-      status: "invited",
-    },
-  });
+  async function upsertSeedUser(input: { name: string; role: Role; password: string }) {
+    const email = `${input.name.toLowerCase()}@${DOMAIN}`;
+    const existing = await prisma.user.findUnique({ where: { email } });
+    const passwordHash = existing?.passwordHash ?? (await hashPassword(input.password));
+    const user = await prisma.user.upsert({
+      where: { email },
+      update: {
+        fullName: input.name,
+        role: input.role,
+        status: existing?.status === "deactivated" ? "deactivated" : "active",
+        ...(existing?.passwordHash ? {} : { passwordHash }),
+      },
+      create: {
+        organizationId: org.id,
+        email,
+        fullName: input.name,
+        role: input.role,
+        status: "active",
+        passwordHash,
+      },
+    });
+    seededLogins.push({
+      name: input.name,
+      email,
+      role: input.role,
+      password: existing?.passwordHash ? null : input.password,
+    });
+    return user;
+  }
 
-  const baryal = await prisma.user.upsert({
-    where: { email: `baryal@${DOMAIN}` },
-    update: {},
-    create: {
-      organizationId: org.id,
-      email: `baryal@${DOMAIN}`,
-      fullName: "Baryal",
-      role: "rep",
-      status: "invited",
-    },
-  });
+  const muqeet = await upsertSeedUser({ name: "Muqeet", role: "admin", password: "cedar-orbit-4821" });
+  const hadi = await upsertSeedUser({ name: "Hadi", role: "manager", password: "flint-raven-7394" });
+  const baryal = await upsertSeedUser({ name: "Baryal", role: "rep", password: "amber-birch-1562" });
 
   const targetDefaults: { metric: "leads_verified" | "emails" | "calls" | "instagram_dms" | "linkedin_messages"; dailyValue: number }[] = [
     { metric: "leads_verified", dailyValue: 5 },
@@ -288,8 +289,11 @@ async function main() {
     });
   }
 
-  console.log("Seed complete.");
-  console.log(`Sign in as: muqeet@${DOMAIN} (admin), hadi@${DOMAIN} (manager), baryal@${DOMAIN} (rep)`);
+  console.log("Seed complete. Sign in at /login:");
+  for (const login of seededLogins) {
+    const password = login.password ?? "already set (not reset)";
+    console.log(`  ${login.email}  ${login.role}  ${password}`);
+  }
 }
 
 main()

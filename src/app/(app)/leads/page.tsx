@@ -1,5 +1,6 @@
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { stringList } from "@/server/json";
 import { LeadInboxTable } from "@/components/LeadInboxTable";
 import { LeadImportWizard } from "@/components/LeadImportWizard";
 import { EmptyState, Panel } from "@/components/ui";
@@ -95,8 +96,8 @@ export default async function LeadInboxPage({ searchParams }: { searchParams: { 
             contactName: l.contactName,
             city: l.city,
             fitScore: l.fitScore,
-            fitReasons: l.fitReasons,
-            fitFlags: l.fitFlags,
+            fitReasons: stringList(l.fitReasons),
+            fitFlags: stringList(l.fitFlags),
             campaignName: l.campaign.name,
             source: l.source,
             sourceUrl: l.sourceUrl,

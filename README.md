@@ -31,21 +31,19 @@ The platform never sends anything to a prospect — every outbound draft has a C
 ## Prerequisites
 
 - Node.js 20+ and npm
-- A Postgres database — either:
-  - **Local**: `docker compose up -d` (starts Postgres on `localhost:5432`, credentials already in `.env.example`), or
-  - **Supabase**: a project's connection string (Project Settings → Database)
+- A Supabase project. Copy the Prisma connection strings from Connect → ORMs → Prisma into `.env`
 
 ## First run
 
 ```bash
 npm install
 cp .env.example .env   # then fill in / adjust values — see below (Prisma's CLI only reads .env, not .env.local, so this project uses .env for everything local)
-npx prisma migrate dev --name init
+npx prisma migrate deploy
 npm run seed
 npm run dev
 ```
 
-Open http://localhost:3000. With `ALLOW_DEV_LOGIN=true` (the default), `/login` shows a "pick a seeded user" list instead of requiring Google — sign in as Muqeet (admin), Hadi (manager) or Baryal (rep), whichever the seed printed emails for.
+Open http://localhost:3000 and sign in with the email and password `npm run seed` prints for Muqeet (admin), Hadi (manager), or Baryal (rep).
 
 To wipe the demo dataset later without touching real accounts: `npm run seed:clear-demo`.
 
@@ -55,15 +53,16 @@ To wipe the demo dataset later without touching real accounts: `npm run seed:cle
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `DATABASE_URL` / `DIRECT_URL` | Everything | Local Postgres or Supabase connection string |
+| `DATABASE_URL` / `DIRECT_URL` | Everything | Supabase pooler (6543) and session (5432) strings |
 | `NEXTAUTH_SECRET` | Everything | Any random 32+ byte string in production |
 | `ALLOWED_EMAIL_DOMAIN` | Login | Only this domain can sign in with Google |
 | `ALLOW_DEV_LOGIN` | Local dev only | Turn off once Google OAuth is confirmed working |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Real Google sign-in | From Google Cloud Console; redirect URI is `{NEXT_PUBLIC_APP_URL}/api/auth/callback/google` |
-| `ANTHROPIC_API_KEY` | AI features | Everything works without it via rule-based fallbacks |
-| Supabase / Places / Apollo / etc. | Phase 2+ | Not read by any code path yet |
+| `AI_PROVIDER` | AI features | `gemini` or `anthropic`. Gemini is used when `GEMINI_API_KEY` is set |
+| `GEMINI_API_KEY` | Gemini | From [Google AI Studio](https://aistudio.google.com/apikey). Without a key, AI features use rule-based fallbacks |
+| `ANTHROPIC_API_KEY` | Claude | Optional. Used when `AI_PROVIDER=anthropic` |
 
-**If you switch `DATABASE_URL` to Supabase**, also apply row-level security policies (see "Going to production" below) before putting real data in it — Phase 1 enforces roles at the application layer (server actions + hidden UI), not yet at the database layer.
+Phase 1 enforces roles in server actions. Prisma connects as the database user, so Supabase row-level security does not apply to these queries.
 
 ## Project structure
 
@@ -77,11 +76,13 @@ prisma/schema.prisma Full data model (SPEC section 4), including Phase 2+ tables
 
 ## Going to production
 
-1. Point `DATABASE_URL`/`DIRECT_URL` at Supabase and run migrations against it.
-2. Write and test Supabase RLS policies for every table per `docs/SPEC.md` section 2 (a rep must not be able to read another rep's rows even via a leaked service key misuse). This build enforces roles in server actions today; RLS is the belt-and-suspenders layer the spec calls for.
-3. Set `ALLOW_DEV_LOGIN=false`, confirm `GOOGLE_CLIENT_ID`/`SECRET` and the OAuth consent screen are production-ready, and set a real `NEXTAUTH_SECRET`.
-4. Add `ANTHROPIC_API_KEY` and set `AI_MONTHLY_BUDGET_USD` deliberately — the budget guard in `src/server/ai/client.ts` hard-stops AI calls once the month's `ai_usage` spend crosses it.
-5. Deploy the Next.js app (Vercel per the SPEC) and continue with Phase 2 in `docs/CLAUDE_CODE_PHASES.md`.
+Clone the repo to `/var/www/products/salesAI` on the VPS. The database is Supabase, not a database on the server. Node.js 20 must be installed as `/usr/bin/node` and `/usr/bin/npm`.
+
+1. Copy `.env.example` to `.env` and fill in the Supabase Prisma URLs, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=https://sales.nerdflow.cloud`, `NEXT_PUBLIC_APP_URL=https://sales.nerdflow.cloud`, `AI_PROVIDER=gemini`, and `GEMINI_API_KEY`.
+2. `npm ci && npx prisma migrate deploy && npm run seed && npm run build`
+3. `sudo cp deploy/salesai.service /etc/systemd/system/salesai.service && sudo systemctl enable --now salesai`
+
+The service runs `next start` on `127.0.0.1:3010`. Nginx proxies `sales.nerdflow.cloud` to that port. After a later `git pull`, run `npm ci`, `npx prisma migrate deploy`, `npm run build`, then `sudo systemctl restart salesai`.
 
 ## Docs carried over from the build kit
 

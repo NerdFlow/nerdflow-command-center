@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { stringList } from "@/server/json";
 import { computeHealth, computeFlags } from "@/server/deals";
 import { DealDetail } from "@/components/DealDetail";
 
@@ -62,7 +63,12 @@ export default async function DealPage({ params }: { params: { id: string } }) {
           occurredAt: c.occurredAt.toISOString(),
           body: c.body,
           review: c.review
-            ? { score: c.review.score, verdict: c.review.verdict, wentWell: c.review.wentWell, missed: c.review.missed }
+            ? {
+                score: c.review.score,
+                verdict: c.review.verdict,
+                wentWell: stringList(c.review.wentWell),
+                missed: stringList(c.review.missed),
+              }
             : null,
         })),
       ].sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())}

@@ -8,8 +8,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -229,7 +229,7 @@ model OrgSettings {
   organizationId           String   @unique @map("organization_id")
   organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   allowedEmailDomain       String   @map("allowed_email_domain")
-  welcomeMessage           String   @default("") @map("welcome_message")
+  welcomeMessage           String   @default("") @map("welcome_message") @db.Text
   assistantName            String   @default("Flow") @map("assistant_name")
   campaignLimitPerRep      Int      @default(2) @map("campaign_limit_per_rep")
   leadDailyCapDefault      Int      @default(30) @map("lead_daily_cap_default")
@@ -237,7 +237,7 @@ model OrgSettings {
   autoPauseReplyFloorPct   Int      @default(1) @map("auto_pause_reply_floor_pct")
   autoPauseBounceCeilPct   Int      @default(5) @map("auto_pause_bounce_ceil_pct")
   emailDraftSavingEnabled  Boolean  @default(false) @map("email_draft_saving_enabled")
-  recordingConsentPolicy   String   @default("Ask the prospect for permission to record before it starts, and only continue if they say yes.") @map("recording_consent_policy")
+  recordingConsentPolicy   String   @default("Ask the prospect for permission to record before it starts, and only continue if they say yes.") @map("recording_consent_policy") @db.Text
   aiMonthlyBudgetUsd       Int      @default(150) @map("ai_monthly_budget_usd")
   updatedAt                DateTime @updatedAt @map("updated_at")
 
@@ -316,9 +316,9 @@ model DailyStat {
   meetingsBooked Int          @default(0) @map("meetings_booked")
   targetPct      Int?         @map("target_pct")
   closedOutAt    DateTime?    @map("closed_out_at")
-  blocker        String?
-  learning       String?
-  aiSummary      String?      @map("ai_summary")
+  blocker        String?      @db.Text
+  learning       String?      @db.Text
+  aiSummary      String?      @map("ai_summary") @db.Text
   streakAfter    Int?         @map("streak_after")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
@@ -333,7 +333,7 @@ model Product {
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
   type           ProductType
-  summary        String
+  summary        String        @db.Text
   status         ProductStatus @default(active)
   isDemo         Boolean       @default(false) @map("is_demo")
   createdAt      DateTime      @default(now()) @map("created_at")
@@ -356,8 +356,8 @@ model KnowledgeDoc {
   campaign       Campaign?       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   title          String
   source         KnowledgeSource
-  storagePath    String?         @map("storage_path")
-  extractedText  String          @map("extracted_text")
+  storagePath    String?         @map("storage_path") @db.Text
+  extractedText  String          @map("extracted_text") @db.Text
   tokenEstimate  Int             @default(0) @map("token_estimate")
   uploadedById   String          @map("uploaded_by")
   uploadedBy     User            @relation(fields: [uploadedById], references: [id])
@@ -377,7 +377,7 @@ model Campaign {
   ownerId          String         @map("owner_id")
   owner            User           @relation("CampaignOwner", fields: [ownerId], references: [id])
   status           CampaignStatus @default(draft)
-  goal             String?
+  goal             String?        @db.Text
   location         String?
   strategy         Json           @default("{}")
   strategyVersion  Int            @default(1) @map("strategy_version")
@@ -385,7 +385,7 @@ model Campaign {
   approvedById     String?        @map("approved_by")
   approvedBy       User?          @relation("CampaignApprovedBy", fields: [approvedById], references: [id])
   approvedAt       DateTime?      @map("approved_at")
-  pausedReason     String?        @map("paused_reason")
+  pausedReason     String?        @map("paused_reason") @db.Text
   isDemo           Boolean        @default(false) @map("is_demo")
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
@@ -407,7 +407,7 @@ model CampaignNote {
   authorId       String?          @map("author_id")
   author         User?            @relation(fields: [authorId], references: [id])
   kind           CampaignNoteKind @default(note)
-  body           String
+  body           String           @db.Text
   createdAt      DateTime         @default(now()) @map("created_at")
 
   @@map("campaign_notes")
@@ -425,7 +425,7 @@ model LeadSourceRun {
   new            Int        @default(0)
   duplicates     Int        @default(0)
   rejectedAuto   Int        @default(0) @map("rejected_auto")
-  error          String?
+  error          String?    @db.Text
   costUsd        Decimal    @default(0) @map("cost_usd") @db.Decimal(10, 2)
 
   leads Lead[]
@@ -448,26 +448,26 @@ model Lead {
   city               String?
   region             String?
   country            String?
-  website            String?
+  website            String?            @db.VarChar(2048)
   phone              String?
   email              String?
-  instagramUrl       String?            @map("instagram_url")
-  linkedinUrl        String?            @map("linkedin_url")
+  instagramUrl       String?            @map("instagram_url") @db.VarChar(2048)
+  linkedinUrl        String?            @map("linkedin_url") @db.VarChar(2048)
   emailVerification  EmailVerification  @default(unknown) @map("email_verification")
   signals            Json               @default("{}")
   source             LeadSource
-  sourceUrl          String?            @map("source_url")
+  sourceUrl          String?            @map("source_url") @db.VarChar(2048)
   sourceRunId        String?            @map("source_run_id")
   sourceRun          LeadSourceRun?     @relation(fields: [sourceRunId], references: [id])
   fitScore           Int                @default(0) @map("fit_score")
-  fitReasons         String[]           @map("fit_reasons")
-  fitFlags           String[]           @map("fit_flags")
+  fitReasons         Json               @default("[]") @map("fit_reasons")
+  fitFlags           Json               @default("[]") @map("fit_flags")
   dedupeKey          String             @map("dedupe_key")
   cadenceStep        Int                @default(0) @map("cadence_step")
   nextTouchAt        DateTime?          @map("next_touch_at")
   approvedById       String?            @map("approved_by")
   approvedBy         User?              @relation("LeadApprovedBy", fields: [approvedById], references: [id])
-  rejectedReason     String?            @map("rejected_reason")
+  rejectedReason     String?            @map("rejected_reason") @db.Text
   isDemo             Boolean            @default(false) @map("is_demo")
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
@@ -493,7 +493,7 @@ model Touch {
   channel        Channel
   step           Int
   outcome        TouchOutcome
-  body           String?
+  body           String?       @db.Text
   externalRef    String?       @map("external_ref")
   occurredAt     DateTime      @map("occurred_at")
   createdAt      DateTime      @default(now()) @map("created_at")
@@ -516,11 +516,11 @@ model Deal {
   stage            DealStage   @default(interested)
   stageChangedAt   DateTime    @default(now()) @map("stage_changed_at")
   checklist        Json        @default("{}")
-  nextStepText     String?     @map("next_step_text")
+  nextStepText     String?     @map("next_step_text") @db.Text
   nextStepAt       DateTime?   @map("next_step_at")
   health           Int         @default(60)
   signals          Json        @default("{}")
-  nextBestAction   String?     @map("next_best_action")
+  nextBestAction   String?     @map("next_best_action") @db.Text
   valueMonthlyUsd  Decimal?    @map("value_monthly_usd") @db.Decimal(10, 2)
   lostReason       LostReason? @map("lost_reason")
   wonAt            DateTime?   @map("won_at")
@@ -560,10 +560,10 @@ model Conversation {
   leadId            String?            @map("lead_id")
   lead              Lead?              @relation(fields: [leadId], references: [id])
   kind              ConversationKind
-  title             String
-  body              String
+  title             String             @db.VarChar(500)
+  body              String             @db.Text
   source            ConversationSource @default(manual)
-  audioPath         String?            @map("audio_path")
+  audioPath         String?            @map("audio_path") @db.VarChar(2048)
   consentConfirmed  Boolean            @default(false) @map("consent_confirmed")
   occurredAt        DateTime           @map("occurred_at")
   reviewStatus      ReviewStatus       @default(none) @map("review_status")
@@ -579,15 +579,15 @@ model Review {
   conversationId  String      @unique @map("conversation_id")
   conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   score           Int
-  verdict         String
-  wentWell        String[]    @map("went_well")
+  verdict         String      @db.Text
+  wentWell        Json        @default("[]") @map("went_well")
   mistakes        Json        @default("[]")
-  missed          String[]
-  tags            String[]
-  checksMet       String[]    @map("checks_met")
+  missed          Json        @default("[]")
+  tags            Json        @default("[]")
+  checksMet       Json        @default("[]") @map("checks_met")
   suggestedStage  String?     @map("suggested_stage")
-  nextBestAction  String?     @map("next_best_action")
-  suggestedMessage String?    @map("suggested_message")
+  nextBestAction  String?     @map("next_best_action") @db.Text
+  suggestedMessage String?    @map("suggested_message") @db.Text
   signals         Json        @default("{}")
   model           String?
   promptVersion   String?     @map("prompt_version")
@@ -595,7 +595,7 @@ model Review {
   repFeedback     RepFeedback? @map("rep_feedback")
   repFeedbackById String?     @map("rep_feedback_by")
   repFeedbackBy   User?       @relation("ReviewFeedbackBy", fields: [repFeedbackById], references: [id])
-  repFeedbackNote String?     @map("rep_feedback_note")
+  repFeedbackNote String?     @map("rep_feedback_note") @db.Text
   createdAt       DateTime    @default(now()) @map("created_at")
 
   @@map("reviews")
@@ -609,10 +609,10 @@ model CoachingRule {
   user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   weekStart      DateTime           @map("week_start") @db.Date
   tag            String
-  ruleText       String             @map("rule_text")
+  ruleText       String             @map("rule_text") @db.Text
   createdById    String?            @map("created_by")
   status         CoachingRuleStatus @default(active)
-  resultNote     String?            @map("result_note")
+  resultNote     String?            @map("result_note") @db.Text
   createdAt      DateTime           @default(now()) @map("created_at")
 
   @@map("coaching_rules")
@@ -638,7 +638,7 @@ model ChatMessage {
   threadId  String     @map("thread_id")
   thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   role      String
-  content   String
+  content   String     @db.Text
   context   Json       @default("{}")
   createdAt DateTime   @default(now()) @map("created_at")
 
@@ -653,10 +653,10 @@ model Integration {
   user           User?               @relation(fields: [userId], references: [id])
   provider       IntegrationProvider
   status         String              @default("disconnected")
-  scopes         String[]
-  encryptedTokens String?            @map("encrypted_tokens")
+  scopes         Json     @default("[]")
+  encryptedTokens String?            @map("encrypted_tokens") @db.Text
   lastSyncAt     DateTime?           @map("last_sync_at")
-  lastError      String?             @map("last_error")
+  lastError      String?             @map("last_error") @db.Text
   createdAt      DateTime            @default(now()) @map("created_at")
   updatedAt      DateTime            @updatedAt @map("updated_at")
 
@@ -693,7 +693,7 @@ model AuditLog {
   before         Json?
   after          Json?
   ip             String?
-  userAgent      String?      @map("user_agent")
+  userAgent      String?      @map("user_agent") @db.Text
   createdAt      DateTime     @default(now()) @map("created_at")
 
   @@index([organizationId, createdAt])
@@ -708,8 +708,8 @@ model Notification {
   user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind           String
   title          String
-  body           String
-  link           String?
+  body           String              @db.Text
+  link           String?             @db.VarChar(2048)
   readAt         DateTime?           @map("read_at")
   channel        NotificationChannel @default(in_app)
   createdAt      DateTime            @default(now()) @map("created_at")
