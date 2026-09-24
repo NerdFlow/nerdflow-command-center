@@ -22,14 +22,6 @@ jobs:
       - run: npm ci
 
       - name: Build
-        env:
-          # Confirms main compiles. The VPS build uses the .env already on the server.
-          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
-          DIRECT_URL: postgresql://build:build@127.0.0.1:5432/build
-          NEXT_PUBLIC_APP_URL: https://sales.nerdflow.cloud
-          NEXTAUTH_URL: https://sales.nerdflow.cloud
-          NEXTAUTH_SECRET: ci-build-placeholder
-          AI_PROVIDER: gemini
         run: |
           npx prisma generate
           npm run build

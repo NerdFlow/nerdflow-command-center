@@ -24,7 +24,7 @@ export default async function LoginPage({
           <div className="w-14 h-14 rounded-2xl bg-ink border border-rule mx-auto mb-4 flex items-center justify-center text-accent font-bold text-2xl">
             F
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight mb-1">NerdFlow Sales Command Center</h1>
+          <h1 className="text-2xl font-semibold tracking-tight mb-1">NerdFlow Sales Command Center v1</h1>
           <p className="text-muted text-sm">Sign in with your {settings?.allowedEmailDomain ?? "nerdflow"} account</p>
         </div>
 
