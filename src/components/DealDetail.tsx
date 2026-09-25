@@ -48,6 +48,8 @@ export function DealDetail({
 }) {
   const router = useRouter();
   const [tab, setTab] = useState("timeline");
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [checklistError, setChecklistError] = useState<string | null>(null);
 
   const stageIdx = STAGE_ORDER.indexOf(deal.stage as (typeof STAGE_ORDER)[number]);
   const visibleStages =
@@ -111,6 +113,7 @@ export function DealDetail({
 
           <Panel>
             <h3 className="text-sm font-medium mb-2">What good looks like</h3>
+            {checklistError && <p className="text-sm text-stop mb-2">{checklistError}</p>}
             {visibleStages.map((stage) => (
               <div key={stage} className="mb-3">
                 <p className="text-xs text-muted font-semibold mb-1">{STAGE_LABEL[stage]}</p>
@@ -120,10 +123,17 @@ export function DealDetail({
                       type="checkbox"
                       className="mt-1 accent-accent"
                       checked={Boolean(deal.checklist[item.key])}
-                      disabled={!canEdit}
+                      disabled={!canEdit || busyKey === item.key}
                       onChange={async (e) => {
-                        await setChecklistItem(deal.id, item.key, e.target.checked);
-                        refresh();
+                        setBusyKey(item.key);
+                        try {
+                          await setChecklistItem(deal.id, item.key, e.target.checked);
+                          refresh();
+                        } catch (err) {
+                          setChecklistError(err instanceof Error ? err.message : "Couldn't save that.");
+                        } finally {
+                          setBusyKey(null);
+                        }
                       }}
                     />
                     {item.label}

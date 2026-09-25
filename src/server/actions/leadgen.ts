@@ -19,6 +19,10 @@ const runInputSchema = z.object({
   maxLeads: z.number().int().min(1).max(MAX_LEADS_PER_RUN),
 });
 
+function failedResult(error: string) {
+  return { status: "failed" as const, found: 0, new: 0, duplicates: 0, rejectedAuto: 0, narration: null, error, costUsd: 0 };
+}
+
 async function loadCampaignForRun(campaignId: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, organizationId: user.organizationId } });
@@ -53,26 +57,52 @@ export async function estimateLeadGenRunCostUsd(campaignId: string, maxLeads: nu
  * status "inbox" regardless of score — nothing here can queue or approve a
  * lead; that stays a human action in the Lead Inbox (CLAUDE.md rule 3).
  */
+/**
+ * Next.js redacts any error thrown across a Server Action boundary in a
+ * production build, replacing it with a generic "Server Components render"
+ * message - it can't tell an intentional `throw new Error("Campaign not
+ * found")` from a real bug, so it hides both. That only ever showed up as a
+ * readable message in `next dev`; production quietly ate it instead. So this
+ * function returns a plain object for every outcome, including input
+ * validation and permission failures, instead of throwing - the client
+ * always gets the real reason.
+ */
 export async function startLeadGenRun(campaignId: string, rawInput: z.infer<typeof runInputSchema>) {
-  const input = runInputSchema.parse(rawInput);
-  const { user, campaign } = await loadCampaignForRun(campaignId);
+  const parsedInput = runInputSchema.safeParse(rawInput);
+  if (!parsedInput.success) {
+    return failedResult(parsedInput.error.issues[0]?.message ?? "Invalid input.");
+  }
+  const input = parsedInput.data;
+
+  let user, campaign;
+  try {
+    ({ user, campaign } = await loadCampaignForRun(campaignId));
+  } catch (err) {
+    return failedResult(err instanceof Error ? err.message : "Couldn't load this campaign.");
+  }
+
   const queries = queriesFor(campaign.strategy, input.keywords);
   const strategy = campaignStrategySchema.safeParse(campaign.strategy);
   const icp = strategy.success ? strategy.data.icp : null;
 
-  const run = await prisma.leadSourceRun.create({
-    data: {
-      organizationId: user.organizationId,
-      campaignId,
-      source: "ai_search",
-      status: "running",
-      locations: [input.location],
-      keywords: queries,
-      maxLeads: input.maxLeads,
-      startedAt: new Date(),
-      narration: "Searching Google for matching businesses…",
-    },
-  });
+  let run;
+  try {
+    run = await prisma.leadSourceRun.create({
+      data: {
+        organizationId: user.organizationId,
+        campaignId,
+        source: "ai_search",
+        status: "running",
+        locations: [input.location],
+        keywords: queries,
+        maxLeads: input.maxLeads,
+        startedAt: new Date(),
+        narration: "Searching Google for matching businesses…",
+      },
+    });
+  } catch {
+    return failedResult("Couldn't start the run — database error creating the run record.");
+  }
 
   try {
     const discovered = await discoverBusinessesWithGemini({
@@ -194,10 +224,14 @@ export async function startLeadGenRun(campaignId: string, rawInput: z.infer<type
     });
   }
 
-  revalidatePath(`/campaigns/${campaignId}`);
-  revalidatePath("/lead-generation");
-  revalidatePath("/leads");
-  return getLeadGenRun(run.id);
+  try {
+    revalidatePath(`/campaigns/${campaignId}`);
+    revalidatePath("/lead-generation");
+    revalidatePath("/leads");
+    return await getLeadGenRun(run.id);
+  } catch (err) {
+    return failedResult(err instanceof Error ? err.message : "Run finished, but couldn't reload its status.");
+  }
 }
 
 export async function getLeadGenRun(runId: string) {

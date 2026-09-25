@@ -33,36 +33,56 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState<(typeof LEAD_REJECT_REASONS)[number]>(LEAD_REJECT_REASONS[0]);
   const [note, setNote] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const busy = pending || busyId !== null;
 
   function refresh() {
     startTransition(() => router.refresh());
   }
 
+  async function run(id: string, fn: () => Promise<unknown>, onDone?: () => void) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await fn();
+      onDone?.();
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div>
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       <div className="flex gap-2 mb-3">
         <Btn
           size="sm"
-          onClick={async () => {
-            const n = await bulkApproveAboveScore(70);
-            alert(`Approved ${n} lead${n === 1 ? "" : "s"} with fit score 70+.`);
-            refresh();
-          }}
-          disabled={pending}
+          onClick={() =>
+            run("bulk-approve", async () => {
+              const n = await bulkApproveAboveScore(70);
+              alert(`Approved ${n} lead${n === 1 ? "" : "s"} with fit score 70+.`);
+            })
+          }
+          disabled={busy}
         >
-          Bulk approve ≥ 70
+          {busyId === "bulk-approve" ? "Approving…" : "Bulk approve ≥ 70"}
         </Btn>
         <Btn
           size="sm"
           variant="stop"
-          onClick={async () => {
-            const n = await bulkRejectNoChannel();
-            alert(`Rejected ${n} lead${n === 1 ? "" : "s"} with no reachable channel.`);
-            refresh();
-          }}
-          disabled={pending}
+          onClick={() =>
+            run("bulk-reject", async () => {
+              const n = await bulkRejectNoChannel();
+              alert(`Rejected ${n} lead${n === 1 ? "" : "s"} with no reachable channel.`);
+            })
+          }
+          disabled={busy}
         >
-          Reject: no reachable channel
+          {busyId === "bulk-reject" ? "Rejecting…" : "Reject: no reachable channel"}
         </Btn>
       </div>
 
@@ -144,32 +164,22 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
                         <Btn
                           size="sm"
                           variant="stop"
-                          onClick={async () => {
-                            await rejectLead(lead.id, reason, note || undefined);
-                            setRejecting(null);
-                            refresh();
-                          }}
+                          disabled={busyId === lead.id}
+                          onClick={() => run(lead.id, () => rejectLead(lead.id, reason, note || undefined), () => setRejecting(null))}
                         >
-                          Confirm
+                          {busyId === lead.id ? "Rejecting…" : "Confirm"}
                         </Btn>
-                        <Btn size="sm" variant="ghost" onClick={() => setRejecting(null)}>
+                        <Btn size="sm" variant="ghost" disabled={busyId === lead.id} onClick={() => setRejecting(null)}>
                           Cancel
                         </Btn>
                       </div>
                     </div>
                   ) : (
                     <div className="flex gap-1.5">
-                      <Btn
-                        size="sm"
-                        variant="primary"
-                        onClick={async () => {
-                          await approveLead(lead.id);
-                          refresh();
-                        }}
-                      >
-                        Approve
+                      <Btn size="sm" variant="primary" disabled={busyId === lead.id} onClick={() => run(lead.id, () => approveLead(lead.id))}>
+                        {busyId === lead.id ? "Approving…" : "Approve"}
                       </Btn>
-                      <Btn size="sm" variant="stop" onClick={() => setRejecting(lead.id)}>
+                      <Btn size="sm" variant="stop" disabled={busy} onClick={() => setRejecting(lead.id)}>
                         Reject
                       </Btn>
                     </div>

@@ -279,18 +279,26 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [showPause, setShowPause] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!canManage) return null;
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
-    await fn();
-    setBusy(false);
-    router.refresh();
+    setError(null);
+    try {
+      await fn();
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
-    <div className="flex flex-wrap gap-2 mb-4">
+    <div className="mb-4">
+    <div className="flex flex-wrap gap-2 items-center">
       {campaign.status === "active" && !showPause && (
         <Btn size="sm" variant="stop" onClick={() => setShowPause(true)}>
           Pause
@@ -322,6 +330,8 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
           Archive
         </Btn>
       )}
+    </div>
+      {error && <p className="text-sm text-stop mt-2">{error}</p>}
     </div>
   );
 }

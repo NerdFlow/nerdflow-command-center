@@ -61,6 +61,7 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
   const [pastedMessage, setPastedMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const countByChannel = useMemo(() => {
     const counts: Partial<Record<Channel, number>> = {};
@@ -135,14 +136,20 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
       return;
     }
     setBusy(true);
-    const res = await logTouchOutcome({ leadId: current.lead.id, channel, outcome, pastedMessage: message });
-    setBusy(false);
-    setPastedOutcome(null);
-    setPastedMessage("");
-    const doneLeadId = current.lead.id;
-    setCards((prev) => prev.filter((c) => c.lead.id !== doneLeadId));
-    if (outcome === "interested" && res.dealId) {
-      router.refresh();
+    setError(null);
+    try {
+      const res = await logTouchOutcome({ leadId: current.lead.id, channel, outcome, pastedMessage: message });
+      setPastedOutcome(null);
+      setPastedMessage("");
+      const doneLeadId = current.lead.id;
+      setCards((prev) => prev.filter((c) => c.lead.id !== doneLeadId));
+      if (outcome === "interested" && res.dealId) {
+        router.refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't log that outcome — try again.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -238,6 +245,8 @@ export function FocusClient({ initialCards, me }: { initialCards: Card[]; me: st
             </span>
           ))}
         </div>
+
+        {error && <p className="text-sm text-stop mb-2">{error}</p>}
 
         {pastedOutcome ? (
           <div className="space-y-2.5">
