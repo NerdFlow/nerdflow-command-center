@@ -30,7 +30,7 @@ export default async function LeadInboxPage({ searchParams }: { searchParams: { 
   });
 
   const campaigns = await prisma.campaign.findMany({
-    where: { organizationId: user.organizationId, status: { in: ["active", "draft", "pending_approval"] } },
+    where: { organizationId: user.organizationId, status: { in: ["active", "draft"] } },
     orderBy: { name: "asc" },
   });
 

@@ -28,17 +28,6 @@ export async function createCampaign(input: {
   const settings = await getOrgSettings();
   const ownerId = user.role === "rep" ? user.id : input.ownerId || user.id;
 
-  if (user.role === "rep") {
-    const activeCount = await prisma.campaign.count({
-      where: { organizationId: user.organizationId, ownerId, status: "active" },
-    });
-    if (activeCount >= settings.campaignLimitPerRep) {
-      throw new Error(
-        `You can only run ${settings.campaignLimitPerRep} active campaigns at a time. Pause one before starting another.`,
-      );
-    }
-  }
-
   const product = await prisma.product.findFirstOrThrow({ where: { id: input.productId, organizationId: user.organizationId } });
   const strategy = fallbackStrategy({
     productName: product.name,
@@ -49,19 +38,20 @@ export async function createCampaign(input: {
     goal: input.goal,
   });
 
+  // No approval gate: a campaign goes live the moment its creator approves the playbook.
   const campaign = await prisma.campaign.create({
     data: {
       organizationId: user.organizationId,
       productId: product.id,
       name: input.name,
       ownerId,
-      status: user.role === "rep" ? "pending_approval" : "active",
+      status: "active",
       goal: input.goal,
       location: input.location,
       strategy: strategy as unknown as object,
       leadDailyCap: settings.leadDailyCapDefault,
-      approvedById: user.role === "rep" ? null : user.id,
-      approvedAt: user.role === "rep" ? null : new Date(),
+      approvedById: user.id,
+      approvedAt: new Date(),
     },
   });
 
@@ -127,35 +117,8 @@ export async function addCampaignNote(campaignId: string, body: string) {
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
-export async function submitCampaignForApproval(campaignId: string) {
-  const { campaign } = await assertCanEditCampaign(campaignId);
-  await prisma.campaign.update({ where: { id: campaign.id }, data: { status: "pending_approval" } });
-  revalidatePath(`/campaigns/${campaignId}`);
-  revalidatePath("/campaigns");
-}
-
-export async function approveCampaign(campaignId: string) {
-  const user = await requireUser();
-  if (user.role === "rep") throw new Error("Only managers and admins can approve campaigns");
-  const campaign = await prisma.campaign.update({
-    where: { id: campaignId },
-    data: { status: "active", approvedById: user.id, approvedAt: new Date() },
-  });
-  await writeAuditLog({
-    organizationId: user.organizationId,
-    actorId: user.id,
-    action: "campaign_approved",
-    entityType: "campaign",
-    entityId: campaignId,
-  });
-  revalidatePath(`/campaigns/${campaignId}`);
-  revalidatePath("/campaigns");
-  return campaign;
-}
-
 export async function pauseCampaign(campaignId: string, reason: string) {
-  const user = await requireUser();
-  if (user.role === "rep") throw new Error("Only managers and admins can pause campaigns");
+  const { user } = await assertCanEditCampaign(campaignId);
   await prisma.campaign.update({ where: { id: campaignId }, data: { status: "paused", pausedReason: reason } });
   await writeAuditLog({
     organizationId: user.organizationId,
@@ -170,17 +133,29 @@ export async function pauseCampaign(campaignId: string, reason: string) {
 }
 
 export async function resumeCampaign(campaignId: string) {
-  const user = await requireUser();
-  if (user.role === "rep") throw new Error("Only managers and admins can resume campaigns");
+  const { user } = await assertCanEditCampaign(campaignId);
   await prisma.campaign.update({ where: { id: campaignId }, data: { status: "active", pausedReason: null } });
+  await writeAuditLog({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "campaign_resumed",
+    entityType: "campaign",
+    entityId: campaignId,
+  });
   revalidatePath(`/campaigns/${campaignId}`);
   revalidatePath("/campaigns");
 }
 
 export async function archiveCampaign(campaignId: string) {
-  const user = await requireUser();
-  if (user.role === "rep") throw new Error("Only managers and admins can archive campaigns");
+  const { user } = await assertCanEditCampaign(campaignId);
   await prisma.campaign.update({ where: { id: campaignId }, data: { status: "archived" } });
+  await writeAuditLog({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "campaign_archived",
+    entityType: "campaign",
+    entityId: campaignId,
+  });
   revalidatePath(`/campaigns/${campaignId}`);
   revalidatePath("/campaigns");
 }

@@ -11,7 +11,7 @@ export async function buildBrief(user: User) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const [queueCount, followUpCount, hotLead, myDeals, pausedCampaigns, pendingApprovals, inboxCount, pacing, rule] =
+  const [queueCount, followUpCount, hotLead, myDeals, pausedCampaigns, openReplies, inboxCount, pacing, rule] =
     await Promise.all([
       prisma.lead.count({
         where: { ownerId: user.id, status: "queued", organizationId: user.organizationId },
@@ -46,11 +46,7 @@ export async function buildBrief(user: User) {
             where: { organizationId: user.organizationId, status: "paused" },
             select: { name: true, pausedReason: true },
           }),
-      user.role === "rep"
-        ? 0
-        : prisma.campaign.count({
-            where: { organizationId: user.organizationId, status: "pending_approval" },
-          }),
+      prisma.reply.count({ where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } } }),
       prisma.lead.count({ where: { ownerId: user.id, organizationId: user.organizationId, status: "inbox" } }),
       getPacing(user),
       prisma.coachingRule.findFirst({
@@ -107,8 +103,8 @@ export async function buildBrief(user: User) {
     }
   }
 
-  if (pendingApprovals > 0) {
-    lines.push(`${pendingApprovals} campaign${pendingApprovals === 1 ? "" : "s"} waiting on your approval.`);
+  if (openReplies > 0) {
+    lines.push(`${openReplies} ${openReplies === 1 ? "person" : "people"} replied and ${openReplies === 1 ? "is" : "are"} waiting on you.`);
   }
 
   if (inboxCount > 0) {

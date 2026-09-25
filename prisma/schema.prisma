@@ -17,8 +17,7 @@ datasource db {
 
 enum Role {
   rep
-  manager
-  admin
+  lead
 }
 
 enum UserStatus {
@@ -54,7 +53,6 @@ enum KnowledgeSource {
 
 enum CampaignStatus {
   draft
-  pending_approval
   active
   paused
   archived
@@ -196,6 +194,26 @@ enum NotificationChannel {
   slack
 }
 
+enum ReplyLabel {
+  interested
+  question
+  objection
+  not_now
+}
+
+enum ReplyStatus {
+  open
+  handled
+  snoozed
+}
+
+enum ObjectionResponseStatus {
+  new
+  testing
+  proven
+  retired
+}
+
 // ───────────────────────────── Core ─────────────────────────────
 
 model Organization {
@@ -225,21 +243,15 @@ model Organization {
 }
 
 model OrgSettings {
-  id                       String   @id @default(uuid())
-  organizationId           String   @unique @map("organization_id")
-  organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  allowedEmailDomain       String   @map("allowed_email_domain")
-  welcomeMessage           String   @default("") @map("welcome_message") @db.Text
-  assistantName            String   @default("Flow") @map("assistant_name")
-  campaignLimitPerRep      Int      @default(2) @map("campaign_limit_per_rep")
-  leadDailyCapDefault      Int      @default(30) @map("lead_daily_cap_default")
-  autoPauseTouchThreshold  Int      @default(150) @map("auto_pause_touch_threshold")
-  autoPauseReplyFloorPct   Int      @default(1) @map("auto_pause_reply_floor_pct")
-  autoPauseBounceCeilPct   Int      @default(5) @map("auto_pause_bounce_ceil_pct")
-  emailDraftSavingEnabled  Boolean  @default(false) @map("email_draft_saving_enabled")
-  recordingConsentPolicy   String   @default("Ask the prospect for permission to record before it starts, and only continue if they say yes.") @map("recording_consent_policy") @db.Text
-  aiMonthlyBudgetUsd       Int      @default(150) @map("ai_monthly_budget_usd")
-  updatedAt                DateTime @updatedAt @map("updated_at")
+  id                   String   @id @default(uuid())
+  organizationId       String   @unique @map("organization_id")
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  allowedEmailDomain   String   @map("allowed_email_domain")
+  assistantName        String   @default("Flow") @map("assistant_name")
+  leadDailyCapDefault  Int      @default(30) @map("lead_daily_cap_default")
+  aiMonthlyBudgetUsd   Int      @default(150) @map("ai_monthly_budget_usd")
+  workingHoursDefault  Json     @default("{\"start\":\"09:00\",\"end\":\"17:30\",\"days\":[1,2,3,4,5]}") @map("working_hours_default")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("org_settings")
 }
@@ -255,11 +267,12 @@ model User {
   status                 UserStatus @default(invited)
   timezone               String     @default("Asia/Karachi")
   workingHours           Json       @default("{\"start\":\"09:00\",\"end\":\"17:30\",\"days\":[1,2,3,4,5]}") @map("working_hours")
-  onboardingCompletedAt  DateTime?  @map("onboarding_completed_at")
-  onboardingProgress     Json       @default("{}") @map("onboarding_progress")
+  profileCompletedAt     DateTime?  @map("profile_completed_at")
+  photoUrl               String?    @map("photo_url") @db.VarChar(2048)
+  channelAccounts        Json       @default("{}") @map("channel_accounts")
+  channelsWorked         Json       @default("[\"call\",\"email\"]") @map("channels_worked")
   lastLoginAt            DateTime?  @map("last_login_at")
   sessionsInvalidatedAt  DateTime?  @map("sessions_invalidated_at")
-  assistantName          String?    @map("assistant_name")
   isDemo                 Boolean    @default(false) @map("is_demo")
   createdAt              DateTime   @default(now()) @map("created_at")
   updatedAt              DateTime   @updatedAt @map("updated_at")
@@ -282,6 +295,8 @@ model User {
   aiUsage           AiUsage[]
   auditLogs         AuditLog[]
   notifications     Notification[]
+  researchApproved  Research[]      @relation("ResearchApprovedBy")
+  sessions          FocusSession[]
 
   @@map("users")
 }
@@ -328,16 +343,25 @@ model DailyStat {
 }
 
 model Product {
-  id             String        @id @default(uuid())
-  organizationId String        @map("organization_id")
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name           String
-  type           ProductType
-  summary        String        @db.Text
-  status         ProductStatus @default(active)
-  isDemo         Boolean       @default(false) @map("is_demo")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id                  String        @id @default(uuid())
+  organizationId      String        @map("organization_id")
+  organization        Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                String
+  type                ProductType
+  summary              String        @db.Text
+  logoUrl             String?       @map("logo_url") @db.VarChar(2048)
+  website             String?       @db.VarChar(2048)
+  audience            String?       @db.Text @map("audience")
+  decisionMakerTitles Json          @default("[]") @map("decision_maker_titles")
+  features            Json          @default("[]")
+  pricing             Json          @default("{}")
+  caseStudies         Json          @default("[]") @map("case_studies")
+  competitors         Json          @default("[]")
+  donts               Json          @default("[]")
+  status              ProductStatus @default(active)
+  isDemo              Boolean       @default(false) @map("is_demo")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
 
   knowledgeDocs KnowledgeDoc[]
   campaigns     Campaign[]
@@ -390,11 +414,14 @@ model Campaign {
   createdAt        DateTime       @default(now()) @map("created_at")
   updatedAt        DateTime       @updatedAt @map("updated_at")
 
-  notes         CampaignNote[]
-  sourceRuns    LeadSourceRun[]
-  leads         Lead[]
-  deals         Deal[]
-  knowledgeDocs KnowledgeDoc[]
+  notes             CampaignNote[]
+  sourceRuns        LeadSourceRun[]
+  leads             Lead[]
+  deals             Deal[]
+  knowledgeDocs     KnowledgeDoc[]
+  research          Research?
+  icps              Icp[]
+  objectionResponses ObjectionResponse[]
 
   @@map("campaigns")
 }
@@ -413,20 +440,91 @@ model CampaignNote {
   @@map("campaign_notes")
 }
 
+model Research {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  campaignId     String    @unique @map("campaign_id")
+  campaign       Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  marketSnapshot String?   @map("market_snapshot") @db.Text
+  buyers         Json      @default("[]")
+  painPoints     Json      @default("[]") @map("pain_points")
+  competitors    Json      @default("[]")
+  channels       Json      @default("[]")
+  angles         Json      @default("[]")
+  sources        Json      @default("[]")
+  approvedById   String?   @map("approved_by")
+  approvedBy     User?     @relation("ResearchApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime? @map("approved_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@map("research")
+}
+
+model Icp {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  campaignId        String   @map("campaign_id")
+  campaign          Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  name              String
+  businessTypes     Json     @default("[]") @map("business_types")
+  keywords          Json     @default("[]")
+  sizeSignals       String?  @map("size_signals") @db.Text
+  mustHave          Json     @default("[]") @map("must_have")
+  niceToHave        Json     @default("[]") @map("nice_to_have")
+  disqualifiers     Json     @default("[]")
+  decisionMakerTitles Json   @default("[]") @map("decision_maker_titles")
+  weights           Json     @default("{}")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  runs LeadSourceRun[]
+
+  @@map("icps")
+}
+
+enum LeadSourceRunStatus {
+  running
+  paused
+  completed
+  failed
+}
+
+enum LeadSourceRunSchedule {
+  once
+  daily
+  weekly
+}
+
 model LeadSourceRun {
-  id             String     @id @default(uuid())
-  organizationId String     @map("organization_id")
-  campaignId     String     @map("campaign_id")
-  campaign       Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  source         LeadSource
-  startedAt      DateTime   @map("started_at")
-  finishedAt     DateTime?  @map("finished_at")
-  found          Int        @default(0)
-  new            Int        @default(0)
-  duplicates     Int        @default(0)
-  rejectedAuto   Int        @default(0) @map("rejected_auto")
-  error          String?    @db.Text
-  costUsd        Decimal    @default(0) @map("cost_usd") @db.Decimal(10, 2)
+  id                  String                 @id @default(uuid())
+  organizationId      String                 @map("organization_id")
+  campaignId          String                 @map("campaign_id")
+  campaign            Campaign               @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  icpId               String?                @map("icp_id")
+  icp                 Icp?                   @relation(fields: [icpId], references: [id])
+  source              LeadSource
+  status              LeadSourceRunStatus    @default(running)
+  locations           Json                   @default("[]")
+  keywords            Json                   @default("[]")
+  maxLeads            Int                    @default(100) @map("max_leads")
+  minFitScore         Int                    @default(50) @map("min_fit_score")
+  autoApproveAbove    Int?                   @map("auto_approve_above")
+  schedule            LeadSourceRunSchedule  @default(once)
+  currentLocation     String?                @map("current_location") @db.Text
+  currentKeyword      String?                @map("current_keyword") @db.Text
+  narration           String?                @db.Text
+  startedAt           DateTime               @map("started_at")
+  finishedAt          DateTime?              @map("finished_at")
+  found               Int                    @default(0)
+  enriched            Int                    @default(0)
+  matchedIcp          Int                    @default(0) @map("matched_icp")
+  new                 Int                    @default(0)
+  duplicates          Int                    @default(0)
+  rejectedAuto        Int                    @default(0) @map("rejected_auto")
+  error               String?                @db.Text
+  costUsd             Decimal                @default(0) @map("cost_usd") @db.Decimal(10, 2)
 
   leads Lead[]
 
@@ -475,6 +573,7 @@ model Lead {
   touches       Touch[]
   deals         Deal[]
   conversations Conversation[]
+  replies       Reply[]
 
   @@index([dedupeKey])
   @@index([ownerId, status, nextTouchAt])
@@ -493,12 +592,68 @@ model Touch {
   channel        Channel
   step           Int
   outcome        TouchOutcome
+  reason         String?       @db.Text
   body           String?       @db.Text
   externalRef    String?       @map("external_ref")
+  sessionId      String?       @map("session_id")
+  session        FocusSession? @relation(fields: [sessionId], references: [id])
   occurredAt     DateTime      @map("occurred_at")
   createdAt      DateTime      @default(now()) @map("created_at")
 
   @@map("touches")
+}
+
+model FocusSession {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel        Channel
+  lengthMinutes  Int       @map("length_minutes")
+  goal           Json      @default("{}")
+  touchCount     Int       @default(0) @map("touch_count")
+  conversationCount Int    @default(0) @map("conversation_count")
+  summary        String?   @db.Text
+  startedAt      DateTime  @map("started_at")
+  endedAt        DateTime? @map("ended_at")
+
+  touches Touch[]
+
+  @@map("focus_sessions")
+}
+
+model Reply {
+  id             String      @id @default(uuid())
+  organizationId String      @map("organization_id")
+  leadId         String      @map("lead_id")
+  lead           Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  channel        Channel
+  text           String      @db.Text
+  label          ReplyLabel?
+  status         ReplyStatus @default(open)
+  responseDraft  String?     @map("response_draft") @db.Text
+  receivedAt     DateTime    @default(now()) @map("received_at")
+  handledAt      DateTime?   @map("handled_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  @@map("replies")
+}
+
+model ObjectionResponse {
+  id              String                   @id @default(uuid())
+  organizationId  String                   @map("organization_id")
+  campaignId      String                   @map("campaign_id")
+  campaign        Campaign                 @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  objection       String                   @db.Text
+  responseText    String                   @map("response_text") @db.Text
+  uses            Int                      @default(0)
+  keptTalkingCount Int                     @default(0) @map("kept_talking_count")
+  lostCount       Int                      @default(0) @map("lost_count")
+  status          ObjectionResponseStatus  @default(new)
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+
+  @@map("objection_responses")
 }
 
 model Deal {

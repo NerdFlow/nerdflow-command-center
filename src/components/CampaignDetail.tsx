@@ -8,8 +8,6 @@ import {
   updateCampaignStrategy,
   rethinkStrategy,
   addCampaignNote,
-  submitCampaignForApproval,
-  approveCampaign,
   pauseCampaign,
   resumeCampaign,
   archiveCampaign,
@@ -42,7 +40,6 @@ export function CampaignDetail({
   knowledgeDocs,
   touchStats,
   canManage,
-  canApprove,
 }: {
   campaign: CampaignData;
   notes: { id: string; body: string; kind: CampaignNoteKind; authorName: string | null; createdAt: string }[];
@@ -50,7 +47,6 @@ export function CampaignDetail({
   knowledgeDocs: { id: string; title: string; source: string }[];
   touchStats: { channel: Channel; outcome: string; count: number }[];
   canManage: boolean;
-  canApprove: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState("overview");
@@ -87,7 +83,7 @@ export function CampaignDetail({
         </div>
       </div>
 
-      <ManagerActions campaign={campaign} canApprove={canApprove} />
+      <CampaignActions campaign={campaign} canManage={canManage} />
 
       <Tabs
         tabs={[
@@ -263,11 +259,13 @@ export function CampaignDetail({
   );
 }
 
-function ManagerActions({ campaign, canApprove }: { campaign: CampaignData; canApprove: boolean }) {
+function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canManage: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [showPause, setShowPause] = useState(false);
+
+  if (!canManage) return null;
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -278,17 +276,7 @@ function ManagerActions({ campaign, canApprove }: { campaign: CampaignData; canA
 
   return (
     <div className="flex flex-wrap gap-2 mb-4">
-      {campaign.status === "draft" && (
-        <Btn size="sm" variant="primary" disabled={busy} onClick={() => run(() => submitCampaignForApproval(campaign.id))}>
-          Submit for approval
-        </Btn>
-      )}
-      {campaign.status === "pending_approval" && canApprove && (
-        <Btn size="sm" variant="go" disabled={busy} onClick={() => run(() => approveCampaign(campaign.id))}>
-          Approve and launch
-        </Btn>
-      )}
-      {campaign.status === "active" && canApprove && !showPause && (
+      {campaign.status === "active" && !showPause && (
         <Btn size="sm" variant="stop" onClick={() => setShowPause(true)}>
           Pause
         </Btn>
@@ -309,12 +297,12 @@ function ManagerActions({ campaign, canApprove }: { campaign: CampaignData; canA
           </Btn>
         </div>
       )}
-      {campaign.status === "paused" && canApprove && (
+      {campaign.status === "paused" && (
         <Btn size="sm" variant="go" disabled={busy} onClick={() => run(() => resumeCampaign(campaign.id))}>
           Resume
         </Btn>
       )}
-      {campaign.status !== "archived" && canApprove && (
+      {campaign.status !== "archived" && (
         <Btn size="sm" variant="ghost" disabled={busy} onClick={() => run(() => archiveCampaign(campaign.id))}>
           Archive
         </Btn>
