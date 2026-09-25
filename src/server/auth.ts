@@ -99,7 +99,7 @@ export async function requireUser(): Promise<CurrentUser> {
   return user;
 }
 
-export async function requireRole(roles: Array<"rep" | "manager" | "admin">): Promise<CurrentUser> {
+export async function requireRole(roles: Array<"rep" | "lead">): Promise<CurrentUser> {
   const user = await requireUser();
   if (!roles.includes(user.role)) redirect("/today");
   return user;

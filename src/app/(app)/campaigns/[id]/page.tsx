@@ -25,8 +25,7 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
     _count: true,
   });
 
-  const canManage = user.role !== "rep" || campaign.ownerId === user.id;
-  const canApprove = user.role !== "rep";
+  const canManage = user.role === "lead" || campaign.ownerId === user.id;
 
   return (
     <CampaignDetail
@@ -65,7 +64,6 @@ export default async function CampaignDetailPage({ params }: { params: { id: str
       knowledgeDocs={campaign.knowledgeDocs.map((d) => ({ id: d.id, title: d.title, source: d.source }))}
       touchStats={touchesByChannel.map((t) => ({ channel: t.channel, outcome: t.outcome, count: t._count }))}
       canManage={canManage}
-      canApprove={canApprove}
     />
   );
 }

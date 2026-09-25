@@ -5,16 +5,21 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import type { ReactNode } from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { FlowPanel } from "@/components/FlowPanel";
 
 type NavItem = { href: string; label: string; badge?: number };
 
 export function AppShell({
   user,
   navItems,
+  streak,
+  assistantName,
   children,
 }: {
   user: { fullName: string; email: string; role: string };
   navItems: NavItem[];
+  streak: number;
+  assistantName: string;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -46,21 +51,28 @@ export function AppShell({
             </Link>
           );
         })}
-        <div className="hidden md:block mt-auto pt-3.5 border-t border-rule">
-          <div className="text-sm font-medium">{user.fullName}</div>
-          <div className="text-xs text-muted mb-2">{user.role}</div>
+        <div className="hidden md:flex items-center gap-1.5 mt-auto pt-3.5 border-t border-rule text-sm">
+          <span>🔥</span>
+          <span className="font-medium">{streak}</span>
+          <span className="text-muted text-xs">day streak</span>
+        </div>
+        <div className="hidden md:block pt-2">
+          <Link href="/profile" className="block hover:text-accent">
+            <div className="text-sm font-medium">{user.fullName}</div>
+            <div className="text-xs text-muted mb-2">{user.role}</div>
+          </Link>
           <ThemeToggle />
+          <Link
+            href="/profile"
+            className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
+          >
+            Profile
+          </Link>
           <Link
             href="/account"
             className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
           >
             Change password
-          </Link>
-          <Link
-            href="/onboarding"
-            className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
-          >
-            Replay onboarding tour
           </Link>
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
@@ -71,6 +83,7 @@ export function AppShell({
         </div>
       </nav>
       <main className="px-4 md:px-10 py-6 md:py-8 pb-28 max-w-[1060px] w-full">{children}</main>
+      <FlowPanel assistantName={assistantName} />
     </div>
   );
 }

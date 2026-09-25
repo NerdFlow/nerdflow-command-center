@@ -5,7 +5,6 @@ import { Panel, Chip, Btn } from "@/components/ui";
 import { CampaignStatus } from "@prisma/client";
 
 const GROUPS: { status: CampaignStatus; label: string }[] = [
-  { status: "pending_approval", label: "Pending approval" },
   { status: "active", label: "Active" },
   { status: "paused", label: "Paused" },
   { status: "archived", label: "Archived" },

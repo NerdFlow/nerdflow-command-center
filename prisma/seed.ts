@@ -85,8 +85,6 @@ async function main() {
       organizationId: org.id,
       allowedEmailDomain: DOMAIN,
       assistantName: "Flow",
-      welcomeMessage:
-        "A note from Muqeet: past attempts at a sales process stalled for three reasons — no shared record of who was contacted, no coaching on what to say next, and no way to tell effort from luck. This platform fixes all three.",
     },
   });
 
@@ -122,8 +120,8 @@ async function main() {
     return user;
   }
 
-  const muqeet = await upsertSeedUser({ name: "Muqeet", role: "admin", password: "cedar-orbit-4821" });
-  const hadi = await upsertSeedUser({ name: "Hadi", role: "manager", password: "flint-raven-7394" });
+  const muqeet = await upsertSeedUser({ name: "Muqeet", role: "lead", password: "cedar-orbit-4821" });
+  const hadi = await upsertSeedUser({ name: "Hadi", role: "lead", password: "flint-raven-7394" });
   const baryal = await upsertSeedUser({ name: "Baryal", role: "rep", password: "amber-birch-1562" });
 
   const targetDefaults: { metric: "leads_verified" | "emails" | "calls" | "instagram_dms" | "linkedin_messages"; dailyValue: number }[] = [

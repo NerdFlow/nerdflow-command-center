@@ -124,3 +124,50 @@ export function Tabs({
 export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="p-7 text-center text-muted">{children}</div>;
 }
+
+const RING_COLORS = ["#34E0A1", "#5B9CF6", "#F06AAE", "#F0B429"];
+
+export function Ring({
+  value,
+  target,
+  label,
+  colorIndex = 0,
+  size = 84,
+}: {
+  value: number;
+  target: number;
+  label: string;
+  colorIndex?: number;
+  size?: number;
+}) {
+  const pct = target > 0 ? Math.min(1, value / target) : 0;
+  const stroke = 6;
+  const r = size / 2 - stroke;
+  const circumference = 2 * Math.PI * r;
+  const color = RING_COLORS[colorIndex % RING_COLORS.length];
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--panel2)" strokeWidth={stroke} fill="none" />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={color}
+            strokeWidth={stroke}
+            fill="none"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - pct)}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-lg font-bold">{value}</span>
+          <span className="text-[10px] text-muted">/{target}</span>
+        </div>
+      </div>
+      <span className="text-xs text-muted">{label}</span>
+    </div>
+  );
+}

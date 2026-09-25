@@ -3,11 +3,11 @@
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
-import { inviteUser, changeUserRole, setUserStatus, forceSignOut, setTarget } from "@/server/actions/admin";
+import { addPerson, changeUserRole, setUserStatus, setTarget } from "@/server/actions/admin";
 import { METRIC_LABEL } from "@/server/targets";
 import type { Role, TargetMetric, UserStatus } from "@prisma/client";
 
-const ROLES: Role[] = ["rep", "manager", "admin"];
+const ROLES: Role[] = ["rep", "lead"];
 const METRICS: TargetMetric[] = ["leads_verified", "emails", "calls", "instagram_dms", "linkedin_messages"];
 
 type TeamUser = {
@@ -20,14 +20,14 @@ type TeamUser = {
   targets: { id: string; metric: TargetMetric; dailyValue: number; effectiveFrom: string }[];
 };
 
-export function AdminTeamClient({ users }: { users: TeamUser[] }) {
+export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [invite, setInvite] = useState({ email: "", fullName: "", role: "rep" as Role });
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ email: "", fullName: "", role: "rep" as Role });
   const [busy, setBusy] = useState(false);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const [lastTempPassword, setLastTempPassword] = useState<{ email: string; password: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null);
 
   function refresh() {
     router.refresh();
@@ -36,31 +36,31 @@ export function AdminTeamClient({ users }: { users: TeamUser[] }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-[17px] font-medium m-0">Users</h2>
-        <Btn variant="primary" size="sm" onClick={() => setInviteOpen((o) => !o)}>
-          {inviteOpen ? "Cancel" : "Invite user"}
+        <h2 className="text-[17px] font-medium m-0">People</h2>
+        <Btn variant="primary" size="sm" onClick={() => setAddOpen((o) => !o)}>
+          {addOpen ? "Cancel" : "Add person"}
         </Btn>
       </div>
 
-      {inviteOpen && (
+      {addOpen && (
         <Panel className="mb-4">
           <div className="grid grid-cols-3 gap-2 mb-3">
             <input
               className="border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm"
               placeholder="Full name"
-              value={invite.fullName}
-              onChange={(e) => setInvite((i) => ({ ...i, fullName: e.target.value }))}
+              value={form.fullName}
+              onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
             />
             <input
               className="border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm"
               placeholder="Email"
-              value={invite.email}
-              onChange={(e) => setInvite((i) => ({ ...i, email: e.target.value }))}
+              value={form.email}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             />
             <select
               className="border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm"
-              value={invite.role}
-              onChange={(e) => setInvite((i) => ({ ...i, role: e.target.value as Role }))}
+              value={form.role}
+              onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as Role }))}
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -69,40 +69,39 @@ export function AdminTeamClient({ users }: { users: TeamUser[] }) {
               ))}
             </select>
           </div>
-          {inviteError && <p className="text-sm text-stop mb-2">{inviteError}</p>}
+          {error && <p className="text-sm text-stop mb-2">{error}</p>}
           <Btn
             size="sm"
             variant="primary"
-            disabled={!invite.email || !invite.fullName || busy}
+            disabled={!form.email || !form.fullName || busy}
             onClick={async () => {
               setBusy(true);
-              setInviteError(null);
+              setError(null);
               try {
-                const { tempPassword } = await inviteUser(invite);
-                setLastTempPassword({ email: invite.email, password: tempPassword });
-                setInvite({ email: "", fullName: "", role: "rep" });
-                setInviteOpen(false);
+                const { tempPassword: pw } = await addPerson(form);
+                setTempPassword({ email: form.email, password: pw });
+                setForm({ email: "", fullName: "", role: "rep" });
+                setAddOpen(false);
                 refresh();
               } catch (e) {
-                setInviteError(e instanceof Error ? e.message : "Couldn't create that account.");
+                setError(e instanceof Error ? e.message : "Couldn't add that person.");
               } finally {
                 setBusy(false);
               }
             }}
           >
-            Create account
+            Add person
           </Btn>
         </Panel>
       )}
 
-      {lastTempPassword && (
+      {tempPassword && (
         <Panel className="mb-4 bg-accent-soft">
           <p className="text-sm">
-            Account created for <b>{lastTempPassword.email}</b>. Temporary password (shown once — send it to them
-            directly, not through a shared channel):
+            Account created for <b>{tempPassword.email}</b>. Temporary password (shown once):
           </p>
-          <p className="font-mono text-sm mt-1 mb-2">{lastTempPassword.password}</p>
-          <button className="text-xs text-muted hover:text-ink" onClick={() => setLastTempPassword(null)}>
+          <p className="font-mono text-sm mt-1 mb-2">{tempPassword.password}</p>
+          <button className="text-xs text-muted hover:text-ink" onClick={() => setTempPassword(null)}>
             Dismiss
           </button>
         </Panel>
@@ -148,18 +147,9 @@ export function AdminTeamClient({ users }: { users: TeamUser[] }) {
                   <td className="py-2">
                     <Chip tone={u.status === "active" ? "go" : u.status === "invited" ? "acc" : "stop"}>{u.status}</Chip>
                   </td>
-                  <td className="py-2 text-muted">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}</td>
+                  <td className="py-2 text-muted">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString("en-US") : "Never"}</td>
                   <td className="py-2">
                     <div className="flex gap-2">
-                      <button
-                        className="text-xs text-accent"
-                        onClick={async () => {
-                          await forceSignOut(u.id);
-                          refresh();
-                        }}
-                      >
-                        Force sign-out
-                      </button>
                       <button
                         className="text-xs text-stop"
                         onClick={async () => {
@@ -240,11 +230,6 @@ function TargetEditor({
       >
         {saving ? "Saving…" : "Save targets"}
       </Btn>
-      {targets.length > 0 && (
-        <div className="mt-3 text-xs text-muted">
-          History: {targets.slice(0, 8).map((t) => `${METRIC_LABEL[t.metric]} ${t.dailyValue} (from ${new Date(t.effectiveFrom).toLocaleDateString()})`).join(" · ")}
-        </div>
-      )}
     </div>
   );
 }

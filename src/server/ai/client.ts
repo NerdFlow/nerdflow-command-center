@@ -93,6 +93,22 @@ function estimateCostUsd(model: string, inputTokens: number, outputTokens: numbe
   return (inputTokens / 1_000_000) * rate.in + (outputTokens / 1_000_000) * rate.out;
 }
 
+/**
+ * Rough pre-call cost estimate for showing "estimated cost" in the UI before
+ * an AI feature runs. ~4 characters per token is a coarse but stable enough
+ * approximation for planning purposes; the real cost is logged to ai_usage
+ * from actual token counts after the call completes. Returns null when no
+ * provider is configured, so callers can hide the estimate rather than show
+ * a number that will never be charged.
+ */
+export function estimatePreCallCostUsd(promptChars: number, maxOutputTokens: number, model?: string): number | null {
+  const provider = resolveProvider();
+  if (!provider) return null;
+  const resolvedModel = modelFor(provider, model);
+  const inputTokens = Math.ceil(promptChars / 4);
+  return estimateCostUsd(resolvedModel, inputTokens, maxOutputTokens);
+}
+
 async function underBudget(organizationId: string): Promise<boolean> {
   const settings = await getOrgSettings();
   const budget = settings.aiMonthlyBudgetUsd || Number(process.env.AI_MONTHLY_BUDGET_USD || 150);
