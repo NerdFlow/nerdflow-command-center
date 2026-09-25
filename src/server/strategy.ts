@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { callClaudeJSON, AiUnavailableError, estimatePreCallCostUsd } from "@/server/ai/client";
+import { SYSTEM_PROMPT, buildUserPrompt, PROMPT_VERSION } from "@/server/ai/prompts/campaign-strategy";
+import { getOrgSettings } from "@/server/settings";
 
 export const channelSchema = z.enum(["email", "call", "instagram", "linkedin"]);
 
@@ -115,4 +118,79 @@ export function fallbackStrategy(input: {
     },
     kill_rule: "Pause at 150 touches if reply rate is under 1% or bounce rate is over 5%.",
   };
+}
+
+const STRATEGY_MAX_OUTPUT_TOKENS = 3000;
+
+type StrategyGenInput = {
+  organizationId: string;
+  userId: string;
+  productName: string;
+  productType: "product" | "service";
+  productSummary: string;
+  location?: string;
+  buyerGuess?: string;
+  goal?: string;
+  notes?: string;
+  existingCampaigns?: string;
+  currentStrategy?: CampaignStrategy;
+  changeRequest?: string;
+};
+
+function promptFor(input: StrategyGenInput, assistantName: string) {
+  return buildUserPrompt({
+    productName: input.productName,
+    productType: input.productType,
+    productSummary: input.productSummary,
+    audience: input.buyerGuess,
+    location: input.location,
+    goal: input.goal,
+    notes: input.notes,
+    existingCampaigns: input.existingCampaigns,
+    currentStrategy: input.currentStrategy ? JSON.stringify(input.currentStrategy) : undefined,
+    changeRequest: input.changeRequest,
+  });
+}
+
+/** Estimated cost in USD for a strategy generation call, or null if AI is unavailable (no key configured). */
+export async function estimateStrategyCostUsd(input: Omit<StrategyGenInput, "organizationId" | "userId">): Promise<number | null> {
+  const settings = await getOrgSettings();
+  const prompt = promptFor({ ...input, organizationId: "", userId: "" }, settings.assistantName);
+  return estimatePreCallCostUsd(SYSTEM_PROMPT(settings.assistantName).length + prompt.length, STRATEGY_MAX_OUTPUT_TOKENS);
+}
+
+/**
+ * Real AI call through the gateway (src/server/ai/client.ts) — Market
+ * Research + ICP + Playbook in one pass, per PROMPT_VERSION in
+ * src/server/ai/prompts/campaign-strategy.ts. Falls back to the rule-based
+ * template only when the AI call fails or the org's budget is hit; the
+ * caller is told which happened so it can be honest with the rep.
+ */
+export async function generateCampaignStrategy(
+  input: StrategyGenInput,
+): Promise<{ strategy: CampaignStrategy; source: "ai"; promptVersion: number } | { strategy: CampaignStrategy; source: "fallback"; reason: string }> {
+  const settings = await getOrgSettings();
+  try {
+    const strategy = await callClaudeJSON({
+      feature: "strategy",
+      organizationId: input.organizationId,
+      userId: input.userId,
+      system: SYSTEM_PROMPT(settings.assistantName),
+      prompt: promptFor(input, settings.assistantName),
+      schema: campaignStrategySchema,
+      maxTokens: STRATEGY_MAX_OUTPUT_TOKENS,
+    });
+    return { strategy, source: "ai", promptVersion: PROMPT_VERSION };
+  } catch (err) {
+    const reason = err instanceof AiUnavailableError ? err.message : "unexpected error generating strategy";
+    const strategy = fallbackStrategy({
+      productName: input.productName,
+      productType: input.productType,
+      productSummary: input.productSummary,
+      location: input.location,
+      buyerGuess: input.buyerGuess,
+      goal: input.goal,
+    });
+    return { strategy, source: "fallback", reason };
+  }
 }

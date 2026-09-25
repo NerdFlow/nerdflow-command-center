@@ -1,17 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Btn } from "@/components/ui";
-import { createProduct, createCampaign } from "@/server/actions/campaigns";
+import { createProduct, createCampaign, estimateNewCampaignCostUsd } from "@/server/actions/campaigns";
 
 export function NewCampaignForm({
   products,
   reps,
-  isManager,
+  isLead,
 }: {
-  products: { id: string; name: string }[];
+  products: { id: string; name: string; type: "product" | "service"; summary: string }[];
   reps: { id: string; fullName: string }[];
-  isManager: boolean;
+  isLead: boolean;
 }) {
   const [creatingProduct, setCreatingProduct] = useState(products.length === 0);
   const [productId, setProductId] = useState(products[0]?.id ?? "");
@@ -23,6 +23,26 @@ export function NewCampaignForm({
   const [ownerId, setOwnerId] = useState(reps[0]?.id ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [estimatedCost, setEstimatedCost] = useState<number | null | "loading">(null);
+
+  const selectedProduct = creatingProduct ? newProduct : products.find((p) => p.id === productId);
+
+  useEffect(() => {
+    const productName = selectedProduct?.name;
+    const productSummary = selectedProduct?.summary;
+    const productType = selectedProduct?.type;
+    if (!productName || !productSummary) {
+      setEstimatedCost(null);
+      return;
+    }
+    setEstimatedCost("loading");
+    const handle = setTimeout(() => {
+      estimateNewCampaignCostUsd({ productName, productType: productType ?? "product", productSummary, location, buyerGuess, goal })
+        .then(setEstimatedCost)
+        .catch(() => setEstimatedCost(null));
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [selectedProduct?.name, selectedProduct?.summary, selectedProduct?.type, location, buyerGuess, goal]);
 
   async function submit() {
     setSubmitting(true);
@@ -36,7 +56,7 @@ export function NewCampaignForm({
       await createCampaign({
         productId: pid,
         name: name || `${newProduct.name || products.find((p) => p.id === pid)?.name}: campaign`,
-        ownerId: isManager ? ownerId : undefined,
+        ownerId: isLead ? ownerId : undefined,
         location,
         goal,
         buyerGuess,
@@ -122,7 +142,7 @@ export function NewCampaignForm({
         <textarea className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1" value={goal} onChange={(e) => setGoal(e.target.value)} />
       </label>
 
-      {isManager && reps.length > 0 && (
+      {isLead && reps.length > 0 && (
         <label className="block text-sm">
           Owner
           <select className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
@@ -138,8 +158,10 @@ export function NewCampaignForm({
       {error && <p className="text-sm text-stop">{error}</p>}
 
       <p className="text-xs text-muted">
-        A starter playbook is generated from a template — edit every part of it on the Playbook tab afterward. AI-assisted
-        generation arrives in Phase 2.
+        Flow drafts the ICP, channels, cadence and messages from the product description — edit every part on the
+        Playbook tab afterward. If Flow is unavailable, a rule-based template is used instead and the campaign says so.
+        {estimatedCost === "loading" && " Estimating cost…"}
+        {typeof estimatedCost === "number" && ` Estimated cost to generate: $${estimatedCost.toFixed(3)}.`}
       </p>
 
       <Btn variant="primary" disabled={submitting || (creatingProduct && !newProduct.name)} onClick={submit}>
