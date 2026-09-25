@@ -199,6 +199,102 @@ async function completeClaude(model: string, system: string, prompt: string, max
   return { text, usage: resp.usage };
 }
 
+export type DiscoveredBusiness = { name: string; website: string; sourceUrl: string };
+
+/**
+ * Real Google Search, grounded through Gemini's built-in search tool — this
+ * is the "Discover" step of lead generation (docs/SPEC.md 5.8 step 2), used
+ * in place of a paid Google Places key. Only Gemini supports this grounding
+ * tool through this SDK, so it throws AiUnavailableError on any other
+ * provider or when the org's AI budget is exhausted; there is no rule-based
+ * fallback for this step, since a template cannot discover real businesses.
+ *
+ * Deliberately returns ONLY what came back as a grounding citation (a real
+ * URL Google Search actually returned), never anything from the model's own
+ * free-text summary — that keeps this step honest per CLAUDE.md rule 4
+ * ("AI never invents facts"). Business details are filled in for real by
+ * fetching each site afterward (src/server/leadgen/extract.ts).
+ */
+export async function discoverBusinessesWithGemini(opts: {
+  organizationId: string;
+  userId?: string | null;
+  queries: string[];
+  location: string;
+  maxResults: number;
+}): Promise<DiscoveredBusiness[]> {
+  const provider = resolveProvider();
+  if (provider !== "gemini") {
+    throw new AiUnavailableError(
+      provider === null ? "no GEMINI_API_KEY configured" : "web search requires Gemini (AI_PROVIDER is set to anthropic)",
+    );
+  }
+  if (!(await underBudget(opts.organizationId))) {
+    throw new AiUnavailableError("monthly AI budget reached");
+  }
+  const gemini = getGemini();
+  if (!gemini) throw new AiUnavailableError("no GEMINI_API_KEY configured");
+
+  const model = modelFor("gemini");
+  const prompt = `Search for real, currently-operating small businesses in "${opts.location}" matching these criteria: ${opts.queries.join("; ")}. Use Google Search. I only care about the search results themselves, not a summary.`;
+  const start = Date.now();
+
+  try {
+    const resp = await gemini.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+        temperature: 0.1,
+        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      },
+    });
+
+    const chunks = resp.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+    const seen = new Set<string>();
+    const businesses: DiscoveredBusiness[] = [];
+    for (const chunk of chunks) {
+      const uri = chunk.web?.uri;
+      const title = chunk.web?.title;
+      if (!uri || !title) continue;
+      let hostname: string;
+      try {
+        hostname = new URL(uri).hostname.replace(/^www\./, "").toLowerCase();
+      } catch {
+        continue;
+      }
+      if (seen.has(hostname)) continue;
+      seen.add(hostname);
+      businesses.push({ name: title, website: uri, sourceUrl: uri });
+      if (businesses.length >= opts.maxResults) break;
+    }
+
+    await logUsage({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      feature: "lead_discovery",
+      model,
+      inputTokens: resp.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: Date.now() - start,
+      success: true,
+    });
+    return businesses;
+  } catch (err) {
+    await logUsage({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      feature: "lead_discovery",
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      latencyMs: Date.now() - start,
+      success: false,
+    });
+    if (err instanceof AiUnavailableError) throw err;
+    throw new AiUnavailableError(err instanceof Error ? err.message : "search request failed");
+  }
+}
+
 export async function callClaudeJSON<T>(opts: {
   feature: AiFeature;
   model?: string;

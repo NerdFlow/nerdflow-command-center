@@ -18,10 +18,11 @@ export default async function LeadGenerationPage() {
 
       <Panel className="mb-6">
         <p className="text-sm text-muted">
-          <b className="text-ink">Not built yet.</b> This is Phase 2b work: Google search by city × keyword, visiting
-          each business&apos;s website, extracting contacts, scoring against a campaign&apos;s ICP, deduping, and landing
-          everything in Lead review — with a live run view and a cost estimate shown before it starts. Import leads
-          via CSV on the Lead Inbox page in the meantime.
+          Manual runs work now — open a campaign&apos;s <b className="text-ink">ICP and lead gen</b> tab and hit{" "}
+          <b className="text-ink">Run now</b>. It searches Google for real businesses, visits each website, scores
+          fit against the campaign&apos;s ICP, dedupes, and lands new ones in the Lead Inbox for approval. Nightly
+          automatic runs need a background worker, which isn&apos;t built yet. Import leads via CSV on the Lead Inbox
+          page as another option.
         </p>
       </Panel>
 

@@ -13,6 +13,7 @@ import {
   archiveCampaign,
 } from "@/server/actions/campaigns";
 import { addKnowledgeDocPaste, deleteKnowledgeDoc } from "@/server/actions/knowledge";
+import { LeadGenRunner } from "@/components/LeadGenRunner";
 import type { Channel, CampaignNoteKind, CampaignStatus, LeadSource } from "@prisma/client";
 
 const CHANNELS: Channel[] = ["email", "call", "instagram", "linkedin"];
@@ -150,7 +151,9 @@ export function CampaignDetail({
           <Panel>
             <h2 className="text-[17px] font-medium mb-2">Lead engine status</h2>
             <p className="text-sm text-muted">
-              Automatic lead generation arrives in Phase 4. For now, add leads through CSV import on the Lead Inbox page.
+              Manual runs are live on the ICP and lead gen tab — searches Google for real businesses and lands
+              them in the Lead Inbox. Nightly automatic runs need a background worker, which isn&apos;t built yet;
+              CSV import on the Lead Inbox page still works in the meantime.
             </p>
           </Panel>
         </div>
@@ -209,10 +212,9 @@ export function CampaignDetail({
               </label>
             ))}
             <p className="text-sm text-muted">Daily cap: {campaign.leadDailyCap}</p>
-            <Btn size="sm" disabled className="mt-2">
-              Run now (Phase 4)
-            </Btn>
           </Panel>
+
+          {canManage && <LeadGenRunner campaignId={campaign.id} />}
 
           <Panel>
             <h2 className="text-[17px] font-medium mb-2">Run history</h2>
