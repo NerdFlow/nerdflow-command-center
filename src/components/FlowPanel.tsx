@@ -41,9 +41,14 @@ export function FlowPanel({ assistantName }: { assistantName: string }) {
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
     setThinking(true);
-    const res = await askFlow({ screen: screenLabel(pathname), message: text });
-    setThinking(false);
-    setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+    try {
+      const res = await askFlow({ screen: screenLabel(pathname), message: text });
+      setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", content: `Couldn't reach Flow — ${e instanceof Error ? e.message : "try again in a moment."}` }]);
+    } finally {
+      setThinking(false);
+    }
   }
 
   if (!open) {

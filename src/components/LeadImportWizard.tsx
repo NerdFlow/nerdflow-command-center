@@ -35,6 +35,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [working, setWorking] = useState(false);
   const [result, setResult] = useState<{ imported: number; duplicates: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   function handleFile(file: File) {
     Papa.parse<Record<string, string>>(file, {
@@ -67,20 +68,32 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
 
   async function runPreview() {
     setWorking(true);
-    const rows = mappedRows().filter((r) => r.business_name);
-    const res = await previewLeadImport(campaignId, rows);
-    setPreview(res);
-    setWorking(false);
-    setStep(3);
+    setError(null);
+    try {
+      const rows = mappedRows().filter((r) => r.business_name);
+      const res = await previewLeadImport(campaignId, rows);
+      setPreview(res);
+      setStep(3);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't check that file.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function commit() {
     setWorking(true);
-    const rows = mappedRows().filter((r) => r.business_name);
-    const res = await commitLeadImport(campaignId, rows);
-    setResult(res);
-    setWorking(false);
-    router.refresh();
+    setError(null);
+    try {
+      const rows = mappedRows().filter((r) => r.business_name);
+      const res = await commitLeadImport(campaignId, rows);
+      setResult(res);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't import these leads.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   function reset() {
@@ -123,6 +136,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
         </div>
       ) : (
         <>
+          {error && <p className="text-sm text-stop mb-3">{error}</p>}
           {step === 1 && (
             <div className="space-y-3">
               <label className="block text-sm">

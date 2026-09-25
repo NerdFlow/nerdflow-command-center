@@ -16,6 +16,7 @@ export function SettingsClient({ settings }: { settings: Settings }) {
   const [form, setForm] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function set<K extends keyof Settings>(key: K, value: Settings[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -60,14 +61,21 @@ export function SettingsClient({ settings }: { settings: Settings }) {
         </label>
       </Panel>
 
+      {error && <p className="text-sm text-stop">{error}</p>}
       <Btn
         variant="primary"
         disabled={saving}
         onClick={async () => {
           setSaving(true);
-          await updateOrgSettings({ ...form, workingHoursDefault: { ...form.workingHoursDefault, days: [1, 2, 3, 4, 5] } });
-          setSaving(false);
-          setSaved(true);
+          setError(null);
+          try {
+            await updateOrgSettings({ ...form, workingHoursDefault: { ...form.workingHoursDefault, days: [1, 2, 3, 4, 5] } });
+            setSaved(true);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Couldn't save settings.");
+          } finally {
+            setSaving(false);
+          }
         }}
       >
         {saving ? "Saving…" : saved ? "Saved" : "Save settings"}

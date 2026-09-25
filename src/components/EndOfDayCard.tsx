@@ -10,6 +10,7 @@ export function EndOfDayCard({ alreadyClosedOut, existingSummary }: { alreadyClo
   const [blocker, setBlocker] = useState("");
   const [learning, setLearning] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (done) {
     return (
@@ -36,15 +37,22 @@ export function EndOfDayCard({ alreadyClosedOut, existingSummary }: { alreadyClo
         value={learning}
         onChange={(e) => setLearning(e.target.value)}
       />
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       <Btn
         variant="primary"
         disabled={saving}
         onClick={async () => {
           setSaving(true);
-          const res = await closeOutDay({ blocker, learning });
-          setSummary(res.aiSummary);
-          setDone(true);
-          setSaving(false);
+          setError(null);
+          try {
+            const res = await closeOutDay({ blocker, learning });
+            setSummary(res.aiSummary);
+            setDone(true);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Couldn't close out — try again.");
+          } finally {
+            setSaving(false);
+          }
         }}
       >
         {saving ? "Closing out…" : "Close out today"}

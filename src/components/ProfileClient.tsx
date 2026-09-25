@@ -47,6 +47,7 @@ export function ProfileClient({
   const [channelsWorked, setChannelsWorked] = useState<Channel[]>(initialChannelsWorked as Channel[]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   function toggleChannel(ch: Channel) {
     setChannelsWorked((prev) => (prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]));
@@ -55,14 +56,20 @@ export function ProfileClient({
 
   async function submit() {
     setSaving(true);
-    await saveProfile({ fullName, timezone, start, end, gmail, instagram, linkedin, channelsWorked, markComplete: isSetup });
-    setSaving(false);
-    if (isSetup) {
-      router.push("/today");
-      router.refresh();
-    } else {
-      setSaved(true);
-      router.refresh();
+    setError(null);
+    try {
+      await saveProfile({ fullName, timezone, start, end, gmail, instagram, linkedin, channelsWorked, markComplete: isSetup });
+      if (isSetup) {
+        router.push("/today");
+        router.refresh();
+      } else {
+        setSaved(true);
+        router.refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save your profile.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -131,6 +138,7 @@ export function ProfileClient({
         )}
 
         {saved && <p className="text-sm text-go">Saved.</p>}
+        {error && <p className="text-sm text-stop">{error}</p>}
 
         <Btn variant="primary" className="w-full justify-center" disabled={saving} onClick={submit}>
           {saving ? "Saving…" : isSetup ? "Take me to Today" : "Save"}

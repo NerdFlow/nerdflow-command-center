@@ -28,6 +28,21 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tempPassword, setTempPassword] = useState<{ email: string; password: string } | null>(null);
+  const [rowBusyId, setRowBusyId] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+
+  async function runRow(id: string, fn: () => Promise<unknown>) {
+    setRowBusyId(id);
+    setRowError(null);
+    try {
+      await fn();
+      refresh();
+    } catch (e) {
+      setRowError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setRowBusyId(null);
+    }
+  }
 
   function refresh() {
     router.refresh();
@@ -107,6 +122,8 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
         </Panel>
       )}
 
+      {rowError && <p className="text-sm text-stop mb-2">{rowError}</p>}
+
       <Panel>
         <table className="w-full text-sm">
           <thead>
@@ -132,10 +149,8 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
                     <select
                       className="border border-rule rounded px-1.5 py-1 bg-panel text-xs"
                       value={u.role}
-                      onChange={async (e) => {
-                        await changeUserRole(u.id, e.target.value as Role);
-                        refresh();
-                      }}
+                      disabled={rowBusyId === u.id}
+                      onChange={(e) => runRow(u.id, () => changeUserRole(u.id, e.target.value as Role))}
                     >
                       {ROLES.map((r) => (
                         <option key={r} value={r}>
@@ -145,17 +160,17 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
                     </select>
                   </td>
                   <td className="py-2">
-                    <Chip tone={u.status === "active" ? "go" : u.status === "invited" ? "acc" : "stop"}>{u.status}</Chip>
+                    <Chip tone={u.status === "active" ? "go" : u.status === "invited" ? "acc" : "stop"}>
+                      {rowBusyId === u.id ? "saving…" : u.status}
+                    </Chip>
                   </td>
                   <td className="py-2 text-muted">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString("en-US") : "Never"}</td>
                   <td className="py-2">
                     <div className="flex gap-2">
                       <button
-                        className="text-xs text-stop"
-                        onClick={async () => {
-                          await setUserStatus(u.id, u.status === "deactivated" ? "active" : "deactivated");
-                          refresh();
-                        }}
+                        className="text-xs text-stop disabled:opacity-40"
+                        disabled={rowBusyId === u.id}
+                        onClick={() => runRow(u.id, () => setUserStatus(u.id, u.status === "deactivated" ? "active" : "deactivated"))}
                       >
                         {u.status === "deactivated" ? "Reactivate" : "Deactivate"}
                       </button>
@@ -196,6 +211,7 @@ function TargetEditor({
     Object.fromEntries(METRICS.map((m) => [m, (latestByMetric.get(m) ?? "").toString()])),
   );
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <div>
@@ -212,20 +228,27 @@ function TargetEditor({
           </label>
         ))}
       </div>
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       <Btn
         size="sm"
         variant="primary"
         disabled={saving}
         onClick={async () => {
           setSaving(true);
-          for (const m of METRICS) {
-            const val = Number(values[m]);
-            if (val > 0 && val !== latestByMetric.get(m)) {
-              await setTarget(userId, m, val);
+          setError(null);
+          try {
+            for (const m of METRICS) {
+              const val = Number(values[m]);
+              if (val > 0 && val !== latestByMetric.get(m)) {
+                await setTarget(userId, m, val);
+              }
             }
+            onSaved();
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Couldn't save targets.");
+          } finally {
+            setSaving(false);
           }
-          setSaving(false);
-          onSaved();
         }}
       >
         {saving ? "Saving…" : "Save targets"}
