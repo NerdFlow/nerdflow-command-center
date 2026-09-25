@@ -72,6 +72,7 @@ enum LeadSource {
   csv
   manual
   portfolio_agent
+  ai_search
 }
 
 enum LeadStatus {
@@ -187,6 +188,7 @@ enum AiFeature {
   weekly_patterns
   reply_classification
   close_out_summary
+  lead_discovery
 }
 
 enum NotificationChannel {
