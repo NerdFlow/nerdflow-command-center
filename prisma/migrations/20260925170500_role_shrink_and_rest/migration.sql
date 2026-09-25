@@ -1,21 +1,7 @@
--- Recovery for the previous migration (20260925160000_v2_phase0_2b_schema),
--- which failed partway through on production: the "Role" enum in production
--- never had a 'lead' value at all (v1 only ever had rep/manager/admin), so
--- `UPDATE users SET role = 'lead' ...` failed before that value existed to
--- assign to anything. Everything before that point in the previous
--- migration (the new enums, the CampaignStatus shrink) already succeeded
--- and is NOT repeated here — this picks up exactly where it stopped.
---
--- Do not run `prisma migrate resolve --applied` for the previous migration
--- and then skip this file - the previous one is only partially done.
--- Instead: `prisma migrate resolve --applied 20260925160000_v2_phase0_2b_schema`
--- (tells Prisma to stop blocking on it, since we're finishing its remaining
--- work here) followed by `prisma migrate deploy` (applies this file).
-
--- Postgres will not let a new enum value be used in the same transaction
--- that adds it, so this must run as its own statement before anything else
--- touches 'lead'.
-ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'lead';
+-- Continuation of 20260925170000_add_role_lead_enum_value (that migration commits 'lead' as a
+-- Role enum value in its own transaction; this one is free to use it).
+-- Everything below is otherwise identical to what 20260925165000_v2_role_catchup_and_rest
+-- attempted (which failed and rolled back in full - production is unaffected by it).
 
 -- Data remap before shrinking Role (manager/admin merge into lead per product doc v2)
 UPDATE "users" SET "role" = 'lead' WHERE "role"::text NOT IN ('rep', 'lead');
