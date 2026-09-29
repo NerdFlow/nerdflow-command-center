@@ -7,6 +7,9 @@ import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
 import { incrementMetricCount } from "@/server/targets";
 import { computeDedupeKey, ruleScore, type LeadRowInput } from "@/server/leads";
+import { extractSiteContact } from "@/server/leadgen/extract";
+import { scoreLead } from "@/server/leadgen/score";
+import { campaignStrategySchema } from "@/server/strategy";
 
 export async function approveLead(leadId: string) {
   const user = await requireUser();
@@ -215,4 +218,171 @@ export async function commitLeadImport(campaignId: string, rawRows: LeadRowInput
 
   revalidatePath("/leads");
   return { imported: toInsert.length, duplicates: preview.duplicates, total: rawRows.length };
+}
+
+/**
+ * Bulk import for the Lead Generation page's "Import list" flow — reps need
+ * to start working a list today, so this never blocks on AI. Every lead
+ * gets a real rule-based score immediately; Gemini Flash-Lite enrichment
+ * (fill missing contacts from the site, real fit score vs the ICP) runs
+ * afterward as a detached background pass and simply doesn't happen if AI
+ * is unavailable or the budget is hit — the rule score already made the
+ * lead usable.
+ */
+export async function commitBulkImport(input: {
+  campaignId: string;
+  rawRows: LeadRowInput[];
+  fileName: string;
+  assignment: { mode: "single" | "split"; repIds: string[] };
+  sendToReviewFirst: boolean;
+}) {
+  const user = await requireUser();
+  const campaign = await prisma.campaign.findFirst({ where: { id: input.campaignId, organizationId: user.organizationId } });
+  if (!campaign) throw new Error("Campaign not found");
+  if (input.assignment.repIds.length === 0) throw new Error("Pick at least one rep to assign these leads to");
+
+  const reps = await prisma.user.findMany({
+    where: { id: { in: input.assignment.repIds }, organizationId: user.organizationId, status: { not: "deactivated" } },
+    select: { id: true },
+  });
+  if (reps.length !== input.assignment.repIds.length) throw new Error("One or more selected reps couldn't be found");
+
+  const preview = await previewLeadImport(input.campaignId, input.rawRows);
+  const toInsert = preview.rows.filter((r) => !r.isDuplicate);
+  const missingContact = toInsert.filter((r) => !r.row.email && !r.row.phone).length;
+
+  const runRecord = await prisma.leadSourceRun.create({
+    data: {
+      organizationId: user.organizationId,
+      campaignId: input.campaignId,
+      source: "csv",
+      status: "completed",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      found: input.rawRows.length,
+      new: toInsert.length,
+      duplicates: preview.duplicates,
+      rejectedAuto: 0,
+      narration: `Import: ${input.fileName}`,
+    },
+  });
+
+  const targetStatus = input.sendToReviewFirst ? "inbox" : "queued";
+  const createdLeadIds: string[] = [];
+  for (let i = 0; i < toInsert.length; i++) {
+    const item = toInsert[i]!;
+    const { row, dedupeKey, score } = item;
+    const ownerId = input.assignment.mode === "single" ? input.assignment.repIds[0]! : input.assignment.repIds[i % input.assignment.repIds.length]!;
+    const lead = await prisma.lead.create({
+      data: {
+        organizationId: user.organizationId,
+        campaignId: input.campaignId,
+        ownerId,
+        businessName: row.business_name,
+        contactName: row.contact_name || null,
+        contactRole: row.contact_role || null,
+        city: row.city || null,
+        region: row.region || null,
+        country: row.country || null,
+        website: row.website || null,
+        phone: row.phone || null,
+        email: row.email || null,
+        instagramUrl: row.instagram_url || null,
+        linkedinUrl: row.linkedin_url || null,
+        source: "csv",
+        sourceUrl: null,
+        sourceRunId: runRecord.id,
+        fitScore: score,
+        fitReasons: [],
+        fitFlags: [],
+        dedupeKey,
+        status: targetStatus,
+        nextTouchAt: targetStatus === "queued" ? new Date() : null,
+      },
+    });
+    createdLeadIds.push(lead.id);
+  }
+
+  await writeAuditLog({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "lead_bulk_import",
+    entityType: "campaign",
+    entityId: input.campaignId,
+    after: { imported: toInsert.length, duplicates: preview.duplicates, total: input.rawRows.length, fileName: input.fileName },
+  });
+
+  revalidatePath("/leads");
+  revalidatePath("/lead-generation");
+  revalidatePath("/focus");
+  revalidatePath("/today");
+
+  // Detached on purpose — never await this. The import is done and usable now.
+  void backgroundEnrichImportedLeads(createdLeadIds, input.campaignId, user.organizationId, runRecord.id).catch(() => {});
+
+  return { imported: toInsert.length, duplicates: preview.duplicates, total: input.rawRows.length, missingContact, runId: runRecord.id };
+}
+
+async function backgroundEnrichImportedLeads(leadIds: string[], campaignId: string, organizationId: string, runId: string) {
+  if (leadIds.length === 0) return;
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  const strategy = campaignStrategySchema.safeParse(campaign?.strategy);
+  const icp = strategy.success ? strategy.data.icp : null;
+  if (!icp) return;
+
+  const startedAt = new Date();
+  let enriched = 0;
+  for (const leadId of leadIds) {
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) continue;
+
+    let email = lead.email;
+    let phone = lead.phone;
+    let instagramUrl = lead.instagramUrl;
+    let linkedinUrl = lead.linkedinUrl;
+    let textSample = "";
+    if (lead.website) {
+      const site = await extractSiteContact(lead.website);
+      if (site) {
+        email = email || site.email;
+        phone = phone || site.phone;
+        instagramUrl = instagramUrl || site.instagramUrl;
+        linkedinUrl = linkedinUrl || site.linkedinUrl;
+        textSample = site.textSample;
+      }
+    }
+
+    const rule = ruleScore({
+      business_name: lead.businessName,
+      website: lead.website ?? undefined,
+      email: email ?? undefined,
+      phone: phone ?? undefined,
+      instagram_url: instagramUrl ?? undefined,
+      linkedin_url: linkedinUrl ?? undefined,
+    });
+
+    try {
+      const result = await scoreLead({
+        organizationId,
+        ruleScore: rule,
+        icp,
+        lead: { name: lead.businessName, website: lead.website ?? "", extractedText: textSample },
+      });
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { email, phone, instagramUrl, linkedinUrl, fitScore: result.score, fitReasons: result.reasons, fitFlags: result.flags },
+      });
+      enriched += 1;
+      await prisma.leadSourceRun.update({ where: { id: runId }, data: { enriched } });
+    } catch {
+      // AI unavailable or budget hit — the lead already has a usable rule-based score. Stop enriching the rest too.
+      break;
+    }
+  }
+
+  const costAgg = await prisma.aiUsage.aggregate({
+    where: { organizationId, createdAt: { gte: startedAt }, feature: { in: ["scoring"] } },
+    _sum: { costUsd: true },
+  });
+  await prisma.leadSourceRun.update({ where: { id: runId }, data: { costUsd: costAgg._sum.costUsd ?? 0 } });
 }

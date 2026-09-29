@@ -529,7 +529,7 @@ model LeadSourceRun {
   duplicates          Int                    @default(0)
   rejectedAuto        Int                    @default(0) @map("rejected_auto")
   error               String?                @db.Text
-  costUsd             Decimal                @default(0) @map("cost_usd") @db.Decimal(10, 2)
+  costUsd             Decimal                @default(0) @map("cost_usd") @db.Decimal(10, 4)
 
   leads Lead[]
 

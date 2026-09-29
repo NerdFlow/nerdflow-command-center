@@ -46,7 +46,7 @@ export async function estimateLeadGenRunCostUsd(campaignId: string, maxLeads: nu
   const discoveryPromptChars = 300 + queries.join("; ").length;
   const discoveryCost = estimatePreCallCostUsd(discoveryPromptChars, 800);
   if (discoveryCost === null) return null;
-  const perLeadFitCheckCost = estimatePreCallCostUsd(1200, 300) ?? 0;
+  const perLeadFitCheckCost = estimatePreCallCostUsd(1200, 300, process.env.AI_MODEL_FAST) ?? 0;
   return discoveryCost + perLeadFitCheckCost * maxLeads;
 }
 

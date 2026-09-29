@@ -5,21 +5,7 @@ import { useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { Btn, Panel } from "@/components/ui";
 import { previewLeadImport, commitLeadImport } from "@/server/actions/leads";
-import type { LeadRowInput } from "@/server/leads";
-
-const FIELDS: { key: keyof LeadRowInput; label: string; required?: boolean }[] = [
-  { key: "business_name", label: "Business name", required: true },
-  { key: "contact_name", label: "Contact name" },
-  { key: "contact_role", label: "Contact role" },
-  { key: "city", label: "City" },
-  { key: "region", label: "Region" },
-  { key: "country", label: "Country" },
-  { key: "website", label: "Website" },
-  { key: "phone", label: "Phone" },
-  { key: "email", label: "Email" },
-  { key: "instagram_url", label: "Instagram URL" },
-  { key: "linkedin_url", label: "LinkedIn URL" },
-];
+import { ColumnMapper, autoMapFields, applyMapping, type FieldMapping } from "@/components/ColumnMapper";
 
 type PreviewResult = Awaited<ReturnType<typeof previewLeadImport>>;
 
@@ -31,7 +17,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
   const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
   const [headers, setHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([]);
-  const [mapping, setMapping] = useState<Partial<Record<keyof LeadRowInput, string>>>({});
+  const [mapping, setMapping] = useState<FieldMapping>({});
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [working, setWorking] = useState(false);
   const [result, setResult] = useState<{ imported: number; duplicates: number; total: number } | null>(null);
@@ -44,25 +30,9 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
       complete: (res) => {
         setHeaders(res.meta.fields ?? []);
         setCsvRows(res.data);
-        const auto: Partial<Record<keyof LeadRowInput, string>> = {};
-        for (const f of FIELDS) {
-          const match = (res.meta.fields ?? []).find((h) => h.toLowerCase().replace(/\s+/g, "_") === f.key);
-          if (match) auto[f.key] = match;
-        }
-        setMapping(auto);
+        setMapping(autoMapFields(res.meta.fields ?? []));
         setStep(2);
       },
-    });
-  }
-
-  function mappedRows(): LeadRowInput[] {
-    return csvRows.map((row) => {
-      const out: Record<string, string> = {};
-      for (const f of FIELDS) {
-        const header = mapping[f.key];
-        if (header && row[header]) out[f.key] = row[header].trim();
-      }
-      return out as LeadRowInput;
     });
   }
 
@@ -70,7 +40,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
     setWorking(true);
     setError(null);
     try {
-      const rows = mappedRows().filter((r) => r.business_name);
+      const rows = applyMapping(csvRows, mapping).filter((r) => r.business_name);
       const res = await previewLeadImport(campaignId, rows);
       setPreview(res);
       setStep(3);
@@ -85,7 +55,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
     setWorking(true);
     setError(null);
     try {
-      const rows = mappedRows().filter((r) => r.business_name);
+      const rows = applyMapping(csvRows, mapping).filter((r) => r.business_name);
       const res = await commitLeadImport(campaignId, rows);
       setResult(res);
       router.refresh();
@@ -169,25 +139,8 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
           {step === 2 && (
             <div>
               <p className="text-sm text-muted mb-3">Match your CSV columns to lead fields. {csvRows.length} rows found.</p>
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {FIELDS.map((f) => (
-                  <label key={f.key} className="text-sm">
-                    {f.label}
-                    {f.required && " *"}
-                    <select
-                      className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg mt-1"
-                      value={mapping[f.key] ?? ""}
-                      onChange={(e) => setMapping((m) => ({ ...m, [f.key]: e.target.value || undefined }))}
-                    >
-                      <option value="">— none —</option>
-                      {headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
+              <div className="mb-4">
+                <ColumnMapper headers={headers} mapping={mapping} onChange={setMapping} />
               </div>
               <Btn variant="primary" disabled={!mapping.business_name || working} onClick={runPreview}>
                 {working ? "Checking…" : "Preview and check duplicates"}

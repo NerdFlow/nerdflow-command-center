@@ -32,6 +32,8 @@ export async function scoreLead(input: {
       prompt: buildUserPrompt({ icp: input.icp, lead: input.lead }),
       schema: fitCheckSchema,
       maxTokens: 500,
+      // Cheap, high-volume classification — Flash-Lite, not the default quality model.
+      model: process.env.AI_MODEL_FAST,
     });
     return {
       score: ai.disqualified ? 0 : Math.round(0.4 * input.ruleScore + 0.6 * ai.fit_score),
