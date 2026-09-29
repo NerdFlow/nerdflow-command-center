@@ -59,6 +59,15 @@ jobs:
               echo "Patched DATABASE_URL with connection_limit=5"
             fi
 
+            # Ensure CRON_SECRET is present so /api/cron/lead-gen can
+            # validate the scheduled GitHub Actions workflow's Authorization
+            # header. Idempotent: only appends if missing or empty.
+            if ! grep -q '^CRON_SECRET=.\+' .env 2>/dev/null; then
+              sed -i.bak '/^CRON_SECRET=/d' .env
+              echo 'CRON_SECRET=${{ secrets.CRON_SECRET }}' >> .env
+              echo "Added CRON_SECRET to .env"
+            fi
+
             # Restart now, before backup/migrate, so the *old* process (which
             # may already be holding a full pool of connections) releases them
             # first. Restarting again at the end (after build) picks up the

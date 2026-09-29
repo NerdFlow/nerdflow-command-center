@@ -1,0 +1,27 @@
+name: Cron - Lead Gen Auto-Run
+
+# Runs the hourly auto lead-gen sweep by calling the app's own protected
+# endpoint. Routed through GitHub Actions instead of a VPS crontab because
+# there is no VPS shell access in this project - see /api/cron/lead-gen
+# for the per-campaign gating logic (already-ran-today, budget, etc).
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/lead-gen
+        run: |
+          set -eu
+          HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "${{ secrets.APP_URL }}/api/cron/lead-gen" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/resp.json
+          if [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Cron call failed"
+            exit 1
+          fi
