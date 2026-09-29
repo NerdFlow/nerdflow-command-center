@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
 import { logTouchOutcome } from "@/server/actions/touches";
+import { getObjectionResponses, recordObjectionFeedback } from "@/server/actions/objections";
 import { renderMessage, type CampaignStrategy } from "@/server/strategy";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
 import type { Channel, TouchOutcome } from "@prisma/client";
@@ -79,6 +80,8 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [objectionIds, setObjectionIds] = useState<Map<string, string>>(new Map());
+  const [objectionFeedback, setObjectionFeedback] = useState<Record<string, "kept_talking" | "lost">>({});
 
   const countByChannel = useMemo(() => {
     const counts: Partial<Record<Channel, number>> = {};
@@ -126,7 +129,31 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
     setFollowUpChannel(null);
     setMeetingAt("");
     setMeetingNote("");
+    setObjectionFeedback({});
   }, [current, channel, me]);
+
+  useEffect(() => {
+    if (!current) return;
+    getObjectionResponses(current.campaign.id)
+      .then((rows) => setObjectionIds(new Map(rows.map((r) => [r.objection, r.id]))))
+      .catch(() => setObjectionIds(new Map()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.campaign.id]);
+
+  async function giveObjectionFeedback(question: string, outcome: "kept_talking" | "lost") {
+    const id = objectionIds.get(question);
+    if (!id) return;
+    setObjectionFeedback((f) => ({ ...f, [question]: outcome }));
+    try {
+      await recordObjectionFeedback(id, outcome);
+    } catch {
+      setObjectionFeedback((f) => {
+        const next = { ...f };
+        delete next[question];
+        return next;
+      });
+    }
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -311,13 +338,32 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
           {current.campaign.strategy.objections?.length > 0 && (
             <details className="border-t border-rule pt-2 mt-4">
               <summary className="cursor-pointer text-sm font-medium">If they push back</summary>
-              <div className="mt-2 space-y-2">
-                {current.campaign.strategy.objections.map((o, i) => (
-                  <div key={i} className="text-sm">
-                    <div className="font-medium">{o.question}</div>
-                    <div className="text-muted">{o.answer}</div>
-                  </div>
-                ))}
+              <div className="mt-2 space-y-3">
+                {current.campaign.strategy.objections.map((o, i) => {
+                  const feedback = objectionFeedback[o.question];
+                  return (
+                    <div key={i} className="text-sm">
+                      <div className="font-medium">{o.question}</div>
+                      <div className="text-muted mb-1">{o.answer}</div>
+                      {objectionIds.has(o.question) && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            className={"text-xs px-2 py-1 rounded border " + (feedback === "kept_talking" ? "border-go bg-go-soft text-go" : "border-rule text-muted hover:text-ink")}
+                            onClick={() => giveObjectionFeedback(o.question, "kept_talking")}
+                          >
+                            Used it — kept talking
+                          </button>
+                          <button
+                            className={"text-xs px-2 py-1 rounded border " + (feedback === "lost" ? "border-stop bg-stop-soft text-stop" : "border-rule text-muted hover:text-ink")}
+                            onClick={() => giveObjectionFeedback(o.question, "lost")}
+                          >
+                            Used it — lost them
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </details>
           )}

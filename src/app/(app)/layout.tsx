@@ -34,6 +34,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { href: "/campaigns", label: "Campaigns" },
     { href: "/lead-generation", label: "Lead Gen", badge: runsInProgress + awaitingReview },
     { href: "/deals", label: "Deals" },
+    { href: "/whats-working", label: "What's Working" },
     ...(user.role === "lead" ? [{ href: "/team", label: "Team" }, { href: "/settings", label: "Settings" }] : []),
   ];
 
