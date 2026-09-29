@@ -2,10 +2,12 @@ import { requireUser } from "@/server/auth";
 import { getQueueForUser } from "@/server/queue";
 import { FocusClient } from "@/components/FocusClient";
 import type { CampaignStrategy } from "@/server/strategy";
+import type { Channel } from "@prisma/client";
 
 export default async function FocusPage() {
   const user = await requireUser();
   const queue = await getQueueForUser(user.id, 50);
+  const allowedChannels = ((user.channelsWorked as string[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
 
   const cards = queue.map(({ lead, campaign, label }) => ({
     lead: {
@@ -38,5 +40,5 @@ export default async function FocusPage() {
     label,
   }));
 
-  return <FocusClient initialCards={cards} me={user.fullName} repTimezone={user.timezone} />;
+  return <FocusClient initialCards={cards} me={user.fullName} repTimezone={user.timezone} allowedChannels={allowedChannels} />;
 }

@@ -88,9 +88,21 @@ const SESSION_LENGTHS: { label: string; seconds: number | null }[] = [
   { label: "Until empty", seconds: null },
 ];
 
-export function FocusClient({ initialCards, me, repTimezone }: { initialCards: Card[]; me: string; repTimezone: string }) {
+export function FocusClient({
+  initialCards,
+  me,
+  repTimezone,
+  allowedChannels,
+}: {
+  initialCards: Card[];
+  me: string;
+  repTimezone: string;
+  allowedChannels: Channel[];
+}) {
   const router = useRouter();
-  const [cards, setCards] = useState(initialCards);
+  // Reps only work the channels assigned to them (Settings/Profile "channels worked") -
+  // a lead whose next touch is on a channel this rep doesn't work never enters their queue.
+  const [cards, setCards] = useState(() => initialCards.filter((c) => allowedChannels.includes(cardChannel(c))));
   const [channelFilter, setChannelFilter] = useState<Channel | "all">("all");
   const [draft, setDraft] = useState("");
   const [pastedOutcome, setPastedOutcome] = useState<TouchOutcome | null>(null);
@@ -113,6 +125,9 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
   const [touchesLogged, setTouchesLogged] = useState(0);
   const [conversations, setConversations] = useState(0);
   const [sessionTotal, setSessionTotal] = useState(0);
+  // Off by default — calls are allowed anytime; this is an opt-in filter for
+  // reps who specifically want to only see leads in their local business hours.
+  const [businessHoursOnly, setBusinessHoursOnly] = useState(false);
 
   const countByChannel = useMemo(() => {
     const counts: Partial<Record<Channel, number>> = {};
@@ -123,15 +138,13 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
     return counts;
   }, [cards]);
 
-  // Call leads only during their business hours — filtered out of the "current" pick (not deleted, just deprioritized) until then.
-  const callable = useMemo(
-    () =>
-      cards.filter((c) => {
-        if (cardChannel(c) !== "call") return true;
-        return leadLocalTimeStatus(c.lead, repTimezone).inBusinessHours;
-      }),
-    [cards, repTimezone],
-  );
+  const callable = useMemo(() => {
+    if (!businessHoursOnly) return cards;
+    return cards.filter((c) => {
+      if (cardChannel(c) !== "call") return true;
+      return leadLocalTimeStatus(c.lead, repTimezone).inBusinessHours;
+    });
+  }, [cards, repTimezone, businessHoursOnly]);
 
   const visibleCards = useMemo(() => {
     const pool = channelFilter === "all" ? callable : callable.filter((c) => cardChannel(c) === channelFilter);
@@ -282,12 +295,14 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
 
   // ─── Session setup ──────────────────────────────────────────────────────
   if (!started) {
-    const channelTiles: { channel: Channel | "all"; label: string; count: number }[] = [
-      { channel: "call", label: "Call", count: countByChannel.call ?? 0 },
-      { channel: "email", label: "Email", count: countByChannel.email ?? 0 },
-      { channel: "instagram", label: "Instagram DM", count: countByChannel.instagram ?? 0 },
-      { channel: "linkedin", label: "LinkedIn DM", count: countByChannel.linkedin ?? 0 },
-    ];
+    const channelTiles: { channel: Channel | "all"; label: string; count: number }[] = (
+      [
+        { channel: "call" as const, label: "Call", count: countByChannel.call ?? 0 },
+        { channel: "email" as const, label: "Email", count: countByChannel.email ?? 0 },
+        { channel: "instagram" as const, label: "Instagram DM", count: countByChannel.instagram ?? 0 },
+        { channel: "linkedin" as const, label: "LinkedIn DM", count: countByChannel.linkedin ?? 0 },
+      ]
+    ).filter((t) => allowedChannels.includes(t.channel));
     const [setupChannel, setSetupChannel] = [channelFilter, setChannelFilter];
 
     return (
@@ -346,6 +361,15 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
               ))}
             </div>
           </div>
+          <label className="flex items-center gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={businessHoursOnly}
+              onChange={(e) => setBusinessHoursOnly(e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
+            <span className="text-sm text-body">Only show call leads in their local business hours</span>
+          </label>
           <div className="flex gap-3">
             <button
               onClick={() => startSession(setupChannel)}
@@ -373,6 +397,10 @@ export function FocusClient({ initialCards, me, repTimezone }: { initialCards: C
         {mins !== null && <span className="text-xs font-mono text-muted bg-panel2 px-2 py-1 rounded-md">{mins}:{secs}</span>}
       </div>
       <div className="flex items-center gap-4">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={businessHoursOnly} onChange={(e) => setBusinessHoursOnly(e.target.checked)} className="accent-[var(--accent)]" />
+          <span className="text-xs text-muted">Business hours only</span>
+        </label>
         <span className="text-sm text-muted">
           <span className="font-semibold text-ink">{touchesLogged}</span> / {sessionTotal} {channelFilter === "call" || channelFilter === "all" ? "calls" : "touches"}
         </span>
