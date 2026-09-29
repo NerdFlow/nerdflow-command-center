@@ -45,6 +45,27 @@ jobs:
             git reset --hard origin/main
             npm ci
 
+            # Cap the app's own connection pool. Without this, the persistent
+            # app process alone can hold most/all of Supabase's session-mode
+            # pooler limit (as low as 15 total client connections), leaving no
+            # room for the backup/migrate connections below - this is exactly
+            # why every deploy since the pooler switch has failed silently.
+            if grep -q '^DATABASE_URL=' .env && ! grep '^DATABASE_URL=' .env | grep -q 'connection_limit='; then
+              if grep '^DATABASE_URL=' .env | grep -q '?'; then
+                sed -i.bak 's|^DATABASE_URL="\(.*\)"$|DATABASE_URL="\1\&connection_limit=5"|' .env
+              else
+                sed -i.bak 's|^DATABASE_URL="\(.*\)"$|DATABASE_URL="\1?connection_limit=5"|' .env
+              fi
+              echo "Patched DATABASE_URL with connection_limit=5"
+            fi
+
+            # Restart now, before backup/migrate, so the *old* process (which
+            # may already be holding a full pool of connections) releases them
+            # first. Restarting again at the end (after build) picks up the
+            # new code - two restarts this one time, one thereafter.
+            if [ "$(id -u)" -eq 0 ]; then systemctl restart salesai; else sudo systemctl restart salesai; fi
+            sleep 3
+
             # Backup before migrations - if this fails, the deploy stops here
             # (set -eu + script_stop: true) and migrate deploy never runs.
             # Loads DIRECT_URL etc. from the project's own .env.

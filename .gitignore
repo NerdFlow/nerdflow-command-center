@@ -15,3 +15,4 @@ prisma/dev.db-journal
 # Pre-migration backups created by the deploy workflow, live on the VPS only.
 backups/
 *.dump
+.env.bak
