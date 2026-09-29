@@ -12,6 +12,10 @@ export async function middleware(req: NextRequest) {
     pathname === "/signup" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/ingest") ||
+    // Bearer-secured with its own CRON_SECRET check in the route handler
+    // (see src/app/api/cron/lead-gen/route.ts) - not session auth, so it
+    // must be exempted here or every call gets redirected to /login first.
+    pathname.startsWith("/api/cron/") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/brand") ||
     pathname === "/favicon.ico";
