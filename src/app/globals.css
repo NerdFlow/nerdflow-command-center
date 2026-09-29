@@ -2,9 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dark-first: bare :root is the dark palette (the doc's default). Light mode
-   only applies when the user explicitly toggles it via [data-theme="light"] —
-   this does NOT follow system preference, by design. */
+/* Bare :root is the dark palette; [data-theme="light"] is applied by
+   layout.tsx's inline script and ThemeToggle based on the device's
+   prefers-color-scheme, unless the user has explicitly overridden it
+   (see docs/SPEC.md 3: "Theme follows the device, with a manual toggle"). */
 :root {
   --bg: #050807;
   --panel: #0b1210;

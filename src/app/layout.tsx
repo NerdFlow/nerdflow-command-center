@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{if(localStorage.getItem('nf-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}`,
+            __html: `try{var s=localStorage.getItem('nf-theme');var m=s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');if(m==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}`,
           }}
         />
       </head>
