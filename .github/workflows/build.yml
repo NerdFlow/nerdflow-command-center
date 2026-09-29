@@ -44,6 +44,21 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             npm ci
+
+            # Backup before migrations - if this fails, the deploy stops here
+            # (set -eu + script_stop: true) and migrate deploy never runs.
+            # Loads DIRECT_URL etc. from the project's own .env.
+            set -a
+            . ./.env
+            set +a
+            mkdir -p backups
+            BACKUP_FILE="backups/pre-migrate-$(date +%Y%m%d%H%M%S).dump"
+            pg_dump "$DIRECT_URL" --format=custom --no-owner --no-acl --file="$BACKUP_FILE"
+            echo "Backup written to $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+            # Keep the last 20 backups only, so this can't grow unbounded.
+            ls -t backups/pre-migrate-*.dump 2>/dev/null | tail -n +21 | xargs -r rm --
+            # Restore with: pg_restore --clean --if-exists --no-owner --no-acl -d "$DIRECT_URL" backups/<file>.dump
+
             npx prisma migrate deploy
             npm run build
             if [ "$(id -u)" -eq 0 ]; then
