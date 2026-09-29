@@ -11,7 +11,7 @@ import { extractSiteContact } from "@/server/leadgen/extract";
 import { scoreLead } from "@/server/leadgen/score";
 import { campaignStrategySchema } from "@/server/strategy";
 
-const MAX_LEADS_PER_RUN = 25;
+const MAX_LEADS_PER_RUN = 1000;
 
 const runInputSchema = z.object({
   location: z.string().min(1),

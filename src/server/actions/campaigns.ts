@@ -56,7 +56,7 @@ export async function createCampaign(input: {
     existingCampaigns: existingCampaigns.map((c) => `${c.name} (${c.location ?? "no location set"})`).join("; ") || undefined,
   });
 
-  // No approval gate: a campaign goes live the moment its creator approves the playbook.
+  // No approval gate — a campaign goes live the moment it's created.
   const campaign = await prisma.campaign.create({
     data: {
       organizationId: user.organizationId,
@@ -68,8 +68,6 @@ export async function createCampaign(input: {
       location: input.location,
       strategy: generated.strategy as unknown as object,
       leadDailyCap: settings.leadDailyCapDefault,
-      approvedById: user.id,
-      approvedAt: new Date(),
     },
   });
 

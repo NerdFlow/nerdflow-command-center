@@ -70,14 +70,14 @@ export function LeadGenRunner({ campaignId }: { campaignId: string }) {
           />
         </label>
         <label className="text-sm">
-          Max leads (up to 25)
+          Max leads (up to 1000)
           <input
             type="number"
             min={1}
-            max={25}
+            max={1000}
             className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg mt-1"
             value={maxLeads}
-            onChange={(e) => setMaxLeads(Math.max(1, Math.min(25, Number(e.target.value) || 1)))}
+            onChange={(e) => setMaxLeads(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))}
             disabled={running}
           />
         </label>
@@ -88,6 +88,12 @@ export function LeadGenRunner({ campaignId }: { campaignId: string }) {
         {estimatedCost === null && "AI unavailable — this feature needs GEMINI_API_KEY configured."}
         {typeof estimatedCost === "number" && `Estimated cost for this run: $${estimatedCost.toFixed(3)}.`}
       </p>
+      {maxLeads > 50 && (
+        <p className="text-xs text-stop mb-3">
+          Runs happen in a single request — there&apos;s no background worker yet. A run this size will take a long time and
+          may time out before finishing. Worth testing with a smaller number first.
+        </p>
+      )}
 
       <Btn variant="primary" disabled={running || !location || typeof estimatedCost !== "number"} onClick={run}>
         {running ? "Running — this can take a minute…" : "Run now"}

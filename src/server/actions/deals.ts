@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
-import { computeHealth, computeFlags, STAGE_ORDER } from "@/server/deals";
+import { computeHealth, computeFlags } from "@/server/deals";
 import type { DealStage, LostReason } from "@prisma/client";
 
 const BOOKING_CRITERION_BY_STAGE: Partial<Record<DealStage, string>> = {
@@ -102,4 +102,3 @@ export async function togglePersonFlag(dealId: string, personId: string, field: 
   revalidatePath(`/deals/${dealId}`);
 }
 
-export const STAGE_LIST = STAGE_ORDER;

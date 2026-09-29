@@ -201,6 +201,9 @@ enum ReplyLabel {
   question
   objection
   not_now
+  unsubscribe
+  out_of_office
+  wrong_person
 }
 
 enum ReplyStatus {
