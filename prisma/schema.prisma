@@ -107,6 +107,7 @@ enum TouchOutcome {
   talked_not_now
   replied
   interested
+  meeting_booked
   not_fit
 }
 
@@ -568,6 +569,7 @@ model Lead {
   fitFlags           Json               @default("[]") @map("fit_flags")
   dedupeKey          String             @map("dedupe_key")
   cadenceStep        Int                @default(0) @map("cadence_step")
+  nextChannelOverride Channel?          @map("next_channel_override")
   nextTouchAt        DateTime?          @map("next_touch_at")
   approvedById       String?            @map("approved_by")
   approvedBy         User?              @relation("LeadApprovedBy", fields: [approvedById], references: [id])

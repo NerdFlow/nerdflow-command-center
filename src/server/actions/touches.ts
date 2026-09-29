@@ -21,6 +21,11 @@ export async function logTouchOutcome(params: {
   channel: Channel;
   outcome: TouchOutcome;
   pastedMessage?: string;
+  /** Follow-up channel handoff (Focus mode Step 5) — e.g. call went unanswered, follow up by email instead of waiting for the next cadence call. Only applies to non-terminal outcomes. */
+  followUpChannel?: Channel;
+  /** Required for outcome "meeting_booked". */
+  meetingAt?: string;
+  meetingNote?: string;
 }) {
   const user = await requireUser();
   const leadOrNull = await prisma.lead.findFirst({
@@ -37,7 +42,7 @@ export async function logTouchOutcome(params: {
   // touch record and audit log below, so it runs in the same parallel batch
   // instead of after them.
   async function applyOutcomeEffect(): Promise<string | null> {
-    if (params.outcome === "interested") {
+    if (params.outcome === "interested" || params.outcome === "meeting_booked") {
       const existingOpenDeal = await prisma.deal.findFirst({
         where: { leadId: lead.id, stage: { notIn: ["won", "lost"] } },
       });
@@ -54,6 +59,13 @@ export async function logTouchOutcome(params: {
           },
         }));
       await prisma.lead.update({ where: { id: lead.id }, data: { status: "deal" } });
+
+      if (params.outcome === "meeting_booked" && params.meetingAt) {
+        await prisma.deal.update({
+          where: { id: deal.id },
+          data: { nextStepText: params.meetingNote || "Meeting booked", nextStepAt: new Date(params.meetingAt) },
+        });
+      }
       return deal.id;
     }
     if (params.outcome === "not_fit") {
@@ -65,25 +77,28 @@ export async function logTouchOutcome(params: {
       return null;
     }
 
-    // sent / no_answer / talked_not_now — advance the cadence
+    // sent / no_answer / talked_not_now — advance the cadence, with an optional channel handoff
     const strategy = lead.campaign.strategy as unknown as CampaignStrategy;
     const cadence = strategy?.cadence ?? [];
     const currentStepDef = cadence[step];
     const nextStepDef = cadence[step + 1];
 
-    if (!nextStepDef) {
+    if (!nextStepDef && !params.followUpChannel) {
       await prisma.lead.update({ where: { id: lead.id }, data: { status: "finished" } });
     } else {
-      const dayDelta = nextStepDef.day - (currentStepDef?.day ?? 0);
+      const dayDelta = nextStepDef ? nextStepDef.day - (currentStepDef?.day ?? 0) : 1;
       const nextTouchAt = scheduleNextTouch({
         occurredAt: now,
         dayDelta,
         timezone: lead.owner.timezone,
         workingHours: lead.owner.workingHours as unknown as WorkingHours,
       });
+      // Per-lead only — never mutate the campaign's shared cadence, which every other lead reads too.
+      const nextDefaultChannel = nextStepDef?.channel ?? currentStepDef?.channel;
+      const nextChannelOverride = params.followUpChannel && params.followUpChannel !== nextDefaultChannel ? params.followUpChannel : null;
       await prisma.lead.update({
         where: { id: lead.id },
-        data: { status: "in_cadence", cadenceStep: step + 1, nextTouchAt },
+        data: { status: "in_cadence", cadenceStep: step + 1, nextTouchAt, nextChannelOverride },
       });
     }
     return null;

@@ -14,7 +14,10 @@ export default async function FocusPage() {
       contactName: lead.contactName,
       contactRole: lead.contactRole,
       city: lead.city,
+      region: lead.region,
+      country: lead.country,
       cadenceStep: lead.cadenceStep,
+      nextChannelOverride: lead.nextChannelOverride,
       signals: lead.signals as Record<string, unknown>,
     },
     campaign: {
@@ -26,11 +29,5 @@ export default async function FocusPage() {
     label,
   }));
 
-  return (
-    <div>
-      <h1 className="text-[28px] tracking-tight mb-1.5">Focus mode</h1>
-      <p className="text-muted mb-6">One lead at a time. Log the outcome and move on.</p>
-      <FocusClient initialCards={cards} me={user.fullName} />
-    </div>
-  );
+  return <FocusClient initialCards={cards} me={user.fullName} repTimezone={user.timezone} />;
 }

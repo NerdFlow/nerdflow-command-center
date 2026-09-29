@@ -23,6 +23,22 @@ export function AppShell({
   children: ReactNode;
 }) {
   const pathname = usePathname();
+  const isFocusMode = pathname.startsWith("/focus");
+
+  if (isFocusMode) {
+    // Full width, no sidebar, no Flow panel — distraction-free per the Focus mode spec.
+    return (
+      <div className="min-h-screen">
+        <div className="flex items-center justify-between px-4 md:px-8 py-3 border-b border-rule">
+          <div className="font-semibold tracking-tight">NerdFlow · Focus</div>
+          <Link href="/today" className="text-sm text-muted hover:text-ink">
+            Exit Focus
+          </Link>
+        </div>
+        <main className="w-full">{children}</main>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] min-h-screen">
