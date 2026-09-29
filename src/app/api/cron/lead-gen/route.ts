@@ -62,19 +62,23 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    try {
-      const run = await executeLeadDiscoveryRun({
-        organizationId: campaign.organizationId,
-        actorUserId: null,
-        campaign,
-        location: campaign.location,
-        maxLeads: AUTO_RUN_SIZE,
-        schedule: "daily",
-      });
-      results.push({ campaignId: campaign.id, campaignName: campaign.name, action: `ran: ${run.status}, ${run.new} new` });
-    } catch (err) {
-      results.push({ campaignId: campaign.id, campaignName: campaign.name, action: `error: ${err instanceof Error ? err.message : "unknown"}` });
-    }
+    // Not awaited: a full discovery run (Places pagination + per-lead AI
+    // scoring) can take minutes, well past the reverse proxy's request
+    // timeout. This process is a persistent systemd service (not
+    // serverless), so the detached run keeps executing after the response
+    // is sent - same pattern as backgroundEnrichImportedLeads.
+    const location = campaign.location;
+    executeLeadDiscoveryRun({
+      organizationId: campaign.organizationId,
+      actorUserId: null,
+      campaign,
+      location,
+      maxLeads: AUTO_RUN_SIZE,
+      schedule: "daily",
+    }).catch((err) => {
+      console.error(`[cron/lead-gen] campaign ${campaign.id} failed:`, err instanceof Error ? err.message : err);
+    });
+    results.push({ campaignId: campaign.id, campaignName: campaign.name, action: "started" });
   }
 
   return NextResponse.json({ checked: campaigns.length, results });
