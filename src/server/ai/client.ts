@@ -300,6 +300,79 @@ export async function discoverBusinessesWithGemini(opts: {
   }
 }
 
+export type GroundedResearch = { text: string; sources: { title: string; url: string }[] };
+
+/**
+ * Grounded market research (Campaign wizard Step 1) — same googleSearch
+ * grounding mechanism as discoverBusinessesWithGemini, but for open-ended
+ * research prose instead of a business-listing scrape. Returns free text
+ * plus the real citation URLs Google actually returned; the caller
+ * structures the text into JSON separately (forced JSON mode doesn't mix
+ * reliably with tool use in this API), and must build "sources" only from
+ * what's returned here, never from the structuring pass.
+ */
+export async function researchMarketWithGemini(opts: {
+  organizationId: string;
+  userId?: string | null;
+  prompt: string;
+}): Promise<GroundedResearch> {
+  const provider = resolveProvider();
+  if (provider !== "gemini") {
+    throw new AiUnavailableError(provider === null ? "no GEMINI_API_KEY configured" : "web search requires Gemini (AI_PROVIDER is set to anthropic)");
+  }
+  if (!(await underBudget(opts.organizationId))) {
+    throw new AiUnavailableError("monthly AI budget reached");
+  }
+  const gemini = getGemini();
+  if (!gemini) throw new AiUnavailableError("no GEMINI_API_KEY configured");
+
+  const model = modelFor("gemini");
+  const start = Date.now();
+  try {
+    const resp = await gemini.models.generateContent({
+      model,
+      contents: opts.prompt,
+      config: { tools: [{ googleSearch: {} }], temperature: 0.2, abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS) },
+    });
+
+    const chunks = resp.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+    const sources: { title: string; url: string }[] = [];
+    const seen = new Set<string>();
+    for (const chunk of chunks) {
+      const uri = chunk.web?.uri;
+      const title = chunk.web?.title;
+      if (!uri || !title || seen.has(uri)) continue;
+      seen.add(uri);
+      sources.push({ title, url: uri });
+    }
+
+    await logUsage({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      feature: "research",
+      model,
+      inputTokens: resp.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: Date.now() - start,
+      success: true,
+    });
+    return { text: resp.text ?? "", sources };
+  } catch (err) {
+    await logUsage({
+      organizationId: opts.organizationId,
+      userId: opts.userId,
+      feature: "research",
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      latencyMs: Date.now() - start,
+      success: false,
+    });
+    if (err instanceof AiUnavailableError) throw err;
+    throw new AiUnavailableError(err instanceof Error ? err.message : "research request failed");
+  }
+}
+
 export async function callClaudeJSON<T>(opts: {
   feature: AiFeature;
   model?: string;

@@ -34,6 +34,7 @@ export function buildUserPrompt(input: {
   existingCampaigns?: string;
   currentStrategy?: string;
   changeRequest?: string;
+  approvedIcp?: unknown;
 }) {
   return `
 Build an outbound campaign strategy for a small team new to sales. Base it only on the product knowledge below.
@@ -45,13 +46,18 @@ ${input.productName}: ${input.productSummary}
 Rep brief: buyer guess "${input.audience ?? "unspecified"}", location "${input.location ?? "unspecified"}", win "${input.goal ?? "unspecified"}", notes "${input.notes ?? "none"}".
 Existing campaigns for this product: ${input.existingCampaigns ?? "none"}
 ${
+  input.approvedIcp
+    ? `<approved_icp>${JSON.stringify(input.approvedIcp)}</approved_icp>\nThis ICP was already researched and approved separately - use it exactly as given for the "icp" field in your response (you may still choose channels/cadence/messages that fit it), do not redefine or second-guess it.`
+    : ""
+}
+${
   input.changeRequest
     ? `<untrusted_current_strategy>${input.currentStrategy ?? ""}</untrusted_current_strategy>\nRequested change: "${input.changeRequest}". Apply it; keep everything else consistent.`
     : ""
 }
 
 Rules:
-- One buyer type in one city or region. If the location is missing, choose the best-fitting one and say why in the summary.
+${input.approvedIcp ? "" : "- One buyer type in one city or region. If the location is missing, choose the best-fitting one and say why in the summary."}
 - 2 or 3 channels chosen for this buyer from: email, call, instagram, linkedin.
 - Cadence 4-6 touches over 10-14 days, day 0 first; every touch uses a chosen channel and adds something new.
 - Messages for chosen channels only, with {name} {biz} {city} {me} {product} placeholders. Emails start with "Subject:" and stay under 90 words; DMs under 45 words; call scripts include a voicemail line.

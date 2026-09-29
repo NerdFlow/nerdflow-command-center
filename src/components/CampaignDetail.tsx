@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Btn, Chip, Panel, Tabs } from "@/components/ui";
 import type { CampaignStrategy } from "@/server/strategy";
 import {
@@ -249,6 +250,7 @@ export function CampaignDetail({
 
       {tab === "playbook" && (
         <PlaybookEditor
+          campaignId={campaign.id}
           strategy={strategy}
           canManage={canManage}
           onChange={update}
@@ -348,6 +350,7 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
 }
 
 function PlaybookEditor({
+  campaignId,
   strategy,
   canManage,
   onChange,
@@ -360,6 +363,7 @@ function PlaybookEditor({
   rethinkNotice,
   version,
 }: {
+  campaignId: string;
   strategy: CampaignStrategy;
   canManage: boolean;
   onChange: (mutator: (s: CampaignStrategy) => CampaignStrategy) => void;
@@ -378,11 +382,20 @@ function PlaybookEditor({
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <p className="text-xs text-muted">Version {version}</p>
-        {canManage && (
-          <Btn size="sm" variant="primary" disabled={!dirty || saving} onClick={onSave}>
-            {saving ? "Saving…" : "Save"}
-          </Btn>
-        )}
+        <div className="flex gap-2">
+          {canManage && (
+            <Link href={`/campaigns/${campaignId}/wizard`}>
+              <Btn size="sm" variant="ghost">
+                Rebuild via wizard (Research → ICP → Playbook)
+              </Btn>
+            </Link>
+          )}
+          {canManage && (
+            <Btn size="sm" variant="primary" disabled={!dirty || saving} onClick={onSave}>
+              {saving ? "Saving…" : "Save"}
+            </Btn>
+          )}
+        </div>
       </div>
       {saveError && <p className="text-sm text-stop">{saveError}</p>}
 

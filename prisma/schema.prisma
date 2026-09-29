@@ -189,6 +189,7 @@ enum AiFeature {
   reply_classification
   close_out_summary
   lead_discovery
+  research
 }
 
 enum NotificationChannel {

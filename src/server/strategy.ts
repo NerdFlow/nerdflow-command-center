@@ -135,6 +135,7 @@ type StrategyGenInput = {
   existingCampaigns?: string;
   currentStrategy?: CampaignStrategy;
   changeRequest?: string;
+  approvedIcp?: CampaignStrategy["icp"];
 };
 
 function promptFor(input: StrategyGenInput, assistantName: string) {
@@ -149,6 +150,7 @@ function promptFor(input: StrategyGenInput, assistantName: string) {
     existingCampaigns: input.existingCampaigns,
     currentStrategy: input.currentStrategy ? JSON.stringify(input.currentStrategy) : undefined,
     changeRequest: input.changeRequest,
+    approvedIcp: input.approvedIcp,
   });
 }
 
@@ -180,7 +182,10 @@ export async function generateCampaignStrategy(
       schema: campaignStrategySchema,
       maxTokens: STRATEGY_MAX_OUTPUT_TOKENS,
     });
-    return { strategy, source: "ai", promptVersion: PROMPT_VERSION };
+    // Belt-and-suspenders: force the approved ICP through exactly as approved,
+    // regardless of what the model actually did with it.
+    const finalStrategy = input.approvedIcp ? { ...strategy, icp: input.approvedIcp } : strategy;
+    return { strategy: finalStrategy, source: "ai", promptVersion: PROMPT_VERSION };
   } catch (err) {
     const reason = err instanceof AiUnavailableError ? err.message : "unexpected error generating strategy";
     const strategy = fallbackStrategy({
