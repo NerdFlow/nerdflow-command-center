@@ -109,6 +109,11 @@ export function estimatePreCallCostUsd(promptChars: number, maxOutputTokens: num
   return estimateCostUsd(resolvedModel, inputTokens, maxOutputTokens);
 }
 
+/** Exported for callers that need to gate a whole batch of work (e.g. the auto-run cron) before spending anything, not just a single gateway call. */
+export async function isUnderAiBudget(organizationId: string): Promise<boolean> {
+  return underBudget(organizationId);
+}
+
 async function underBudget(organizationId: string): Promise<boolean> {
   const settings = await getOrgSettings();
   const budget = settings.aiMonthlyBudgetUsd || Number(process.env.AI_MONTHLY_BUDGET_USD || 150);

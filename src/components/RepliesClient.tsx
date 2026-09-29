@@ -14,10 +14,13 @@ import {
   applyUnsubscribe,
   searchMyLeads,
   logManualReply,
+  getRepliesOverview,
 } from "@/server/actions/replies";
 import type { Channel, ReplyLabel, LostReason } from "@prisma/client";
 
-type ReplyRow = { id: string; businessName: string; channel: Channel; label: ReplyLabel | null; text: string; receivedAt: string };
+type Overview = Awaited<ReturnType<typeof getRepliesOverview>>;
+type ReplyRow = Overview["openReplies"][number];
+type WaitingRow = Overview["waitingForReply"][number];
 type ReplyDetail = Awaited<ReturnType<typeof getReplyDetail>>;
 
 const CHANNEL_LABEL: Record<Channel, string> = { call: "Call", email: "Email", instagram: "Instagram", linkedin: "LinkedIn" };
@@ -47,81 +50,104 @@ const CLOSE_REASONS: { value: LostReason; label: string }[] = [
   { value: "went_silent", label: "Ghost — no response" },
 ];
 
-export function RepliesClient({ replies: initialReplies }: { replies: ReplyRow[] }) {
+function channelLink(channel: "gmail" | "instagram" | "linkedin", value: string) {
+  if (channel === "gmail") return `https://mail.google.com/mail/?authuser=${encodeURIComponent(value)}`;
+  if (channel === "instagram") return `https://instagram.com/${value.replace(/^@/, "")}`;
+  return value.startsWith("http") ? value : `https://${value}`;
+}
+
+export function RepliesClient({ overview }: { overview: Overview }) {
   const router = useRouter();
-  const [replies, setReplies] = useState(initialReplies);
-  const [filter, setFilter] = useState<ReplyLabel | "all">("all");
-  const [selectedId, setSelectedId] = useState<string | null>(initialReplies[0]?.id ?? null);
+  const [openReplies, setOpenReplies] = useState(overview.openReplies);
+  const [waiting, setWaiting] = useState(overview.waitingForReply);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ReplyDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-
-  const counts = replies.reduce<Partial<Record<ReplyLabel, number>>>((acc, r) => {
-    if (r.label) acc[r.label] = (acc[r.label] ?? 0) + 1;
-    return acc;
-  }, {});
-  const visible = filter === "all" ? replies : replies.filter((r) => r.label === filter);
+  const [prefillLead, setPrefillLead] = useState<{ id: string; name: string; channel: Channel } | null>(null);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!expandedId) {
       setDetail(null);
       return;
     }
     setLoadingDetail(true);
-    getReplyDetail(selectedId)
+    getReplyDetail(expandedId)
       .then(setDetail)
       .finally(() => setLoadingDetail(false));
-  }, [selectedId]);
+  }, [expandedId]);
 
-  function removeFromList(id: string) {
-    setReplies((prev) => prev.filter((r) => r.id !== id));
-    setSelectedId((cur) => (cur === id ? (replies.find((r) => r.id !== id)?.id ?? null) : cur));
+  function removeFromWaitingOnYou(id: string) {
+    setOpenReplies((prev) => prev.filter((r) => r.id !== id));
+    setExpandedId((cur) => (cur === id ? null : cur));
     router.refresh();
   }
 
+  const { gmail, instagram, linkedin } = overview.channelAccounts;
+
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: "320px 1fr 360px" }}>
-      <div>
-        <div className="flex justify-between items-start mb-1">
+    <div className="max-w-2xl">
+      <h1 className="text-[22px] tracking-tight mb-4">Replies</h1>
+
+      <Panel className="mb-6">
+        <div className="flex flex-wrap gap-6 mb-3">
           <div>
-            <h1 className="text-[22px] tracking-tight mb-0.5">Replies</h1>
-            <p className="text-sm text-muted m-0">{replies.length} waiting on you</p>
+            <p className="text-2xl font-bold m-0">{overview.summary.messagedThisWeek}</p>
+            <p className="text-xs text-muted m-0">Messaged this week</p>
           </div>
-          <Btn size="sm" onClick={() => setLogOpen(true)}>
-            + Log a reply
-          </Btn>
+          <div>
+            <p className="text-2xl font-bold m-0">{overview.summary.repliedThisWeek}</p>
+            <p className="text-xs text-muted m-0">Replied</p>
+          </div>
+          <div>
+            <p className="text-2xl font-bold m-0">{openReplies.length}</p>
+            <p className="text-xs text-muted m-0">Waiting</p>
+          </div>
         </div>
-
-        <div className="flex flex-wrap gap-1.5 my-3">
-          <button
-            onClick={() => setFilter("all")}
-            className={"text-xs px-2.5 py-1 rounded-full border " + (filter === "all" ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted")}
-          >
-            All {replies.length}
-          </button>
-          {(Object.keys(LABEL_TEXT) as ReplyLabel[])
-            .filter((l) => counts[l])
-            .map((l) => (
-              <button
-                key={l}
-                onClick={() => setFilter(l)}
-                className={"text-xs px-2.5 py-1 rounded-full border " + (filter === l ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted")}
-              >
-                {LABEL_TEXT[l]} {counts[l]}
-              </button>
-            ))}
+        <div className="flex flex-wrap gap-2">
+          {gmail && (
+            <a href={channelLink("gmail", gmail)} target="_blank" rel="noreferrer">
+              <Btn size="sm" variant="ghost">Open Gmail</Btn>
+            </a>
+          )}
+          {instagram && (
+            <a href={channelLink("instagram", instagram)} target="_blank" rel="noreferrer">
+              <Btn size="sm" variant="ghost">Open Instagram</Btn>
+            </a>
+          )}
+          {linkedin && (
+            <a href={channelLink("linkedin", linkedin)} target="_blank" rel="noreferrer">
+              <Btn size="sm" variant="ghost">Open LinkedIn</Btn>
+            </a>
+          )}
+          {!gmail && !instagram && !linkedin && (
+            <p className="text-xs text-muted m-0">Add your channel accounts in Profile to get quick-open links here.</p>
+          )}
         </div>
+      </Panel>
 
-        <div className="space-y-0.5">
-          {visible.length === 0 && <p className="text-sm text-muted py-4">Nobody&apos;s waiting on you.</p>}
-          {visible.map((r) => (
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-[17px] font-medium m-0">Waiting on you ({openReplies.length})</h2>
+        <Btn size="sm" onClick={() => { setPrefillLead(null); setLogOpen(true); }}>
+          + Log a reply
+        </Btn>
+      </div>
+
+      {openReplies.length === 0 && (
+        <Panel className="mb-6">
+          <p className="text-sm text-muted m-0">Nobody&apos;s waiting on you.</p>
+        </Panel>
+      )}
+
+      <div className="space-y-2 mb-6">
+        {openReplies.map((r) => (
+          <div key={r.id}>
             <button
-              key={r.id}
-              onClick={() => setSelectedId(r.id)}
-              className={"block w-full text-left px-3 py-2.5 rounded-lg border-l-2 " + (selectedId === r.id ? "border-accent bg-panel2" : "border-transparent hover:bg-panel2")}
+              onClick={() => setExpandedId((cur) => (cur === r.id ? null : r.id))}
+              className={"block w-full text-left px-4 py-3 rounded-card border " + (expandedId === r.id ? "border-accent bg-panel2" : "border-rule bg-panel hover:border-accent")}
             >
               <div className="flex justify-between items-baseline gap-2">
-                <span className="font-medium text-sm truncate">{r.businessName}</span>
+                <span className="font-medium text-sm">{r.businessName}</span>
                 <span className="text-xs text-muted shrink-0">{timeAgo(r.receivedAt)}</span>
               </div>
               <div className="flex items-center gap-1.5 mt-0.5 mb-1">
@@ -130,48 +156,79 @@ export function RepliesClient({ replies: initialReplies }: { replies: ReplyRow[]
               </div>
               <p className="text-xs text-muted m-0 truncate">{r.text}</p>
             </button>
+
+            {expandedId === r.id && (
+              <div className="mt-2 space-y-4">
+                {loadingDetail && (
+                  <Panel>
+                    <p className="text-muted m-0">Loading…</p>
+                  </Panel>
+                )}
+                {!loadingDetail && detail && (
+                  <>
+                    <ReplyDetailPanel detail={detail} />
+                    <DraftPanel key={r.id} replyId={r.id} initialLabel={detail.reply.label} initialDraft={detail.reply.responseDraft} onHandled={() => removeFromWaitingOnYou(r.id)} />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <h2 className="text-[17px] font-medium mb-2">Did they reply? ({waiting.length})</h2>
+      {waiting.length === 0 ? (
+        <Panel>
+          <p className="text-sm text-muted m-0">Nothing sent recently that&apos;s still waiting on a response.</p>
+        </Panel>
+      ) : (
+        <div className="space-y-1.5">
+          {waiting.map((w) => (
+            <Panel key={w.touchId} className="flex justify-between items-center py-2.5">
+              <div>
+                <p className="text-sm font-medium m-0">{w.businessName}</p>
+                <p className="text-xs text-muted m-0">
+                  {CHANNEL_LABEL[w.channel]} · sent {timeAgo(w.occurredAt)}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Btn
+                  size="sm"
+                  variant="go"
+                  onClick={() => {
+                    setPrefillLead({ id: w.leadId, name: w.businessName, channel: w.channel });
+                    setLogOpen(true);
+                  }}
+                >
+                  Replied
+                </Btn>
+                <Btn size="sm" variant="ghost" onClick={() => setWaiting((prev) => prev.filter((x) => x.touchId !== w.touchId))}>
+                  Not yet
+                </Btn>
+              </div>
+            </Panel>
           ))}
         </div>
-      </div>
+      )}
 
-      <div>
-        {!selectedId && (
-          <Panel>
-            <p className="text-muted">Pick a reply from the list.</p>
-          </Panel>
-        )}
-        {selectedId && loadingDetail && (
-          <Panel>
-            <p className="text-muted">Loading…</p>
-          </Panel>
-        )}
-        {selectedId && !loadingDetail && detail && <ReplyDetailPanel detail={detail} />}
-      </div>
-
-      <div>
-        {selectedId && detail && (
-          <DraftPanel
-            key={selectedId}
-            replyId={selectedId}
-            initialLabel={detail.reply.label}
-            initialDraft={detail.reply.responseDraft}
-            onHandled={() => removeFromList(selectedId)}
-          />
-        )}
-      </div>
-
-      {logOpen && <LogReplyModal onClose={() => setLogOpen(false)} onLogged={() => router.refresh()} />}
+      {logOpen && (
+        <LogReplyModal
+          prefillLead={prefillLead}
+          onClose={() => setLogOpen(false)}
+          onLogged={() => router.refresh()}
+        />
+      )}
     </div>
   );
 }
 
 function ReplyDetailPanel({ detail }: { detail: ReplyDetail }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Panel>
         <div className="flex justify-between items-start mb-2">
           <div>
-            <h2 className="text-[17px] font-medium m-0">{detail.lead.businessName}</h2>
+            <h3 className="text-[15px] font-medium m-0">{detail.lead.businessName}</h3>
             <p className="text-sm text-muted m-0">{detail.lead.contactName ?? "Contact unknown"}</p>
           </div>
           <div className="text-right">
@@ -181,32 +238,29 @@ function ReplyDetailPanel({ detail }: { detail: ReplyDetail }) {
         </div>
 
         <p className="text-xs text-muted uppercase tracking-wide mb-1">Their reply</p>
-        <p className="text-sm whitespace-pre-wrap bg-panel2 rounded-lg p-3 mb-3">{detail.reply.text}</p>
-        <p className="text-xs text-muted m-0">{timeAgo(detail.reply.receivedAt as unknown as string)}</p>
-      </Panel>
+        <p className="text-sm whitespace-pre-wrap bg-panel2 rounded-lg p-3 mb-1">{detail.reply.text}</p>
 
-      <Panel>
-        <p className="text-xs text-muted uppercase tracking-wide mb-2">Contact info</p>
-        {detail.lead.email && <p className="text-sm m-0 mb-1">✉ {detail.lead.email}</p>}
-        {detail.lead.phone && <p className="text-sm m-0">☎ {detail.lead.phone}</p>}
-        {!detail.lead.email && !detail.lead.phone && <p className="text-sm text-muted m-0">No contact info on file.</p>}
-      </Panel>
+        <div className="flex justify-between text-xs text-muted mt-2">
+          <span>
+            {detail.lead.email && `✉ ${detail.lead.email}`} {detail.lead.phone && `· ☎ ${detail.lead.phone}`}
+          </span>
+          <span>{timeAgo(detail.reply.receivedAt as unknown as string)}</span>
+        </div>
 
-      <Panel>
-        <p className="text-xs text-muted uppercase tracking-wide mb-2">History</p>
-        {detail.history.length === 0 ? (
-          <p className="text-sm text-muted m-0">Nothing logged yet.</p>
-        ) : (
-          <ul className="list-none m-0 p-0 space-y-1.5">
-            {detail.history.map((h, i) => (
-              <li key={i} className="text-sm flex justify-between">
-                <span>
-                  {CHANNEL_LABEL[h.channel]} · {h.label === "sent" ? "Sent" : h.label === "replied" ? "Replied" : h.label.replace("_", " ")}
-                </span>
-                <span className="text-muted">{timeAgo(h.at)}</span>
-              </li>
-            ))}
-          </ul>
+        {detail.history.length > 0 && (
+          <details className="mt-3">
+            <summary className="text-xs text-accent cursor-pointer">History ({detail.history.length})</summary>
+            <ul className="list-none m-0 p-0 mt-2 space-y-1">
+              {detail.history.map((h, i) => (
+                <li key={i} className="text-xs flex justify-between">
+                  <span>
+                    {CHANNEL_LABEL[h.channel]} · {h.label === "sent" ? "Sent" : h.label === "replied" ? "Replied" : h.label.replace("_", " ")}
+                  </span>
+                  <span className="text-muted">{timeAgo(h.at)}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </Panel>
     </div>
@@ -306,7 +360,7 @@ function DraftPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Panel>
         <p className="text-sm font-medium mb-2">Here&apos;s what I&apos;d send</p>
         {classifying ? (
@@ -314,7 +368,7 @@ function DraftPanel({
         ) : draft ? (
           <>
             <textarea
-              className="w-full border border-rule rounded-lg px-3 py-2 bg-bg text-sm min-h-[160px] mb-2"
+              className="w-full border border-rule rounded-lg px-3 py-2 bg-bg text-sm min-h-[140px] mb-2"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
             />
@@ -344,82 +398,79 @@ function DraftPanel({
 
       <Panel>
         <p className="text-xs text-muted uppercase tracking-wide mb-2">Actions</p>
-        <div className="space-y-2">
-          <Btn variant="go" className="w-full justify-center" disabled={busy !== null} onClick={() => run("sent", () => markReplySent(replyId))}>
+        <div className="flex flex-wrap gap-2">
+          <Btn variant="go" disabled={busy !== null} onClick={() => run("sent", () => markReplySent(replyId))}>
             {busy === "sent" ? "Marking…" : "Mark as sent"}
           </Btn>
-
-          {!showMeeting ? (
-            <Btn variant="ghost" className="w-full justify-center" disabled={busy !== null} onClick={() => setShowMeeting(true)}>
-              Book meeting
-            </Btn>
-          ) : (
-            <div className="border border-rule rounded-lg p-2.5 space-y-2">
-              <input
-                type="datetime-local"
-                className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
-                value={meetingAt}
-                onChange={(e) => setMeetingAt(e.target.value)}
-              />
-              <input
-                className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
-                placeholder="Note (optional)"
-                value={meetingNote}
-                onChange={(e) => setMeetingNote(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <Btn
-                  size="sm"
-                  variant="primary"
-                  disabled={!meetingAt || busy !== null}
-                  onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote))}
-                >
-                  {busy === "meeting" ? "Booking…" : "Confirm"}
-                </Btn>
-                <Btn size="sm" variant="ghost" onClick={() => setShowMeeting(false)}>
-                  Cancel
-                </Btn>
-              </div>
-            </div>
-          )}
-
-          <Btn variant="ghost" className="w-full justify-center" disabled={busy !== null} onClick={() => run("snooze", () => snoozeReply(replyId))}>
+          <Btn variant="ghost" disabled={busy !== null} onClick={() => setShowMeeting((s) => !s)}>
+            Book meeting
+          </Btn>
+          <Btn variant="ghost" disabled={busy !== null} onClick={() => run("snooze", () => snoozeReply(replyId))}>
             {busy === "snooze" ? "Snoozing…" : "Snooze"}
           </Btn>
-
-          {!showClose ? (
-            <button className="w-full text-left text-sm text-stop px-1 py-1" onClick={() => setShowClose(true)}>
-              Close lead — choose reason
-            </button>
-          ) : (
-            <div className="border border-rule rounded-lg p-2.5 space-y-1.5">
-              {CLOSE_REASONS.map((r) => (
-                <button
-                  key={r.value}
-                  disabled={busy !== null}
-                  className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-panel2"
-                  onClick={() => run("close", () => closeLeadFromReply(replyId, r.value))}
-                >
-                  {r.label}
-                </button>
-              ))}
-              <button className="text-xs text-muted px-2" onClick={() => setShowClose(false)}>
-                Cancel
-              </button>
-            </div>
-          )}
+          <Btn variant="stop" disabled={busy !== null} onClick={() => setShowClose((s) => !s)}>
+            Close lead
+          </Btn>
         </div>
+
+        {showMeeting && (
+          <div className="border border-rule rounded-lg p-2.5 space-y-2 mt-3">
+            <input
+              type="datetime-local"
+              className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
+              value={meetingAt}
+              onChange={(e) => setMeetingAt(e.target.value)}
+            />
+            <input
+              className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
+              placeholder="Note (optional)"
+              value={meetingNote}
+              onChange={(e) => setMeetingNote(e.target.value)}
+            />
+            <Btn
+              size="sm"
+              variant="primary"
+              disabled={!meetingAt || busy !== null}
+              onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote))}
+            >
+              {busy === "meeting" ? "Booking…" : "Confirm meeting"}
+            </Btn>
+          </div>
+        )}
+
+        {showClose && (
+          <div className="border border-rule rounded-lg p-2.5 space-y-1.5 mt-3">
+            {CLOSE_REASONS.map((r) => (
+              <button
+                key={r.value}
+                disabled={busy !== null}
+                className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-panel2"
+                onClick={() => run("close", () => closeLeadFromReply(replyId, r.value))}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        )}
       </Panel>
     </div>
   );
 }
 
-function LogReplyModal({ onClose, onLogged }: { onClose: () => void; onLogged: () => void }) {
+function LogReplyModal({
+  prefillLead,
+  onClose,
+  onLogged,
+}: {
+  prefillLead: { id: string; name: string; channel: Channel } | null;
+  onClose: () => void;
+  onLogged: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ id: string; businessName: string; city: string | null }[]>([]);
-  const [leadId, setLeadId] = useState<string | null>(null);
-  const [leadName, setLeadName] = useState("");
-  const [channel, setChannel] = useState<Channel>("email");
+  const [leadId, setLeadId] = useState<string | null>(prefillLead?.id ?? null);
+  const [leadName, setLeadName] = useState(prefillLead?.name ?? "");
+  const [channel, setChannel] = useState<Channel>(prefillLead?.channel ?? "email");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -481,9 +532,11 @@ function LogReplyModal({ onClose, onLogged }: { onClose: () => void; onLogged: (
           <div className="space-y-2.5">
             <p className="text-sm">
               For <b>{leadName}</b>{" "}
-              <button className="text-xs text-accent" onClick={() => setLeadId(null)}>
-                change
-              </button>
+              {!prefillLead && (
+                <button className="text-xs text-accent" onClick={() => setLeadId(null)}>
+                  change
+                </button>
+              )}
             </p>
             <select className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" value={channel} onChange={(e) => setChannel(e.target.value as Channel)}>
               {(["email", "call", "instagram", "linkedin"] as Channel[]).map((c) => (

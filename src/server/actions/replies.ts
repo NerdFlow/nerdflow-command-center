@@ -49,6 +49,72 @@ async function findOrCreateOpenDeal(lead: { id: string; ownerId: string; campaig
   });
 }
 
+/** Summary strip + "Waiting on you" + "Did they reply?" for the stacked Replies page. */
+export async function getRepliesOverview() {
+  const user = await requireUser();
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const twoWeeksAgo = new Date();
+  twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+
+  const [openReplies, messagedThisWeek, repliedThisWeek, sentTouches] = await Promise.all([
+    prisma.reply.findMany({
+      where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } },
+      include: { lead: true },
+      orderBy: { receivedAt: "desc" },
+    }),
+    prisma.touch.count({ where: { userId: user.id, outcome: "sent", occurredAt: { gte: weekAgo } } }),
+    prisma.reply.count({ where: { receivedAt: { gte: weekAgo }, lead: { ownerId: user.id, organizationId: user.organizationId } } }),
+    prisma.touch.findMany({
+      where: { userId: user.id, outcome: "sent", occurredAt: { gte: twoWeeksAgo } },
+      include: { lead: true },
+      orderBy: { occurredAt: "desc" },
+      take: 100,
+    }),
+  ]);
+
+  const waitingCandidates = sentTouches.filter((t) =>
+    ["in_cadence", "queued", "finished"].includes(t.lead.status),
+  );
+  const repliesByLead = await prisma.reply.findMany({
+    where: { leadId: { in: waitingCandidates.map((t) => t.leadId) } },
+    select: { leadId: true, receivedAt: true },
+  });
+  const latestReplyByLead = new Map<string, Date>();
+  for (const r of repliesByLead) {
+    const cur = latestReplyByLead.get(r.leadId);
+    if (!cur || r.receivedAt > cur) latestReplyByLead.set(r.leadId, r.receivedAt);
+  }
+  const seenLead = new Set<string>();
+  const waitingForReply = waitingCandidates.filter((t) => {
+    if (seenLead.has(t.leadId)) return false;
+    const replyAt = latestReplyByLead.get(t.leadId);
+    if (replyAt && replyAt > t.occurredAt) return false;
+    seenLead.add(t.leadId);
+    return true;
+  });
+
+  return {
+    channelAccounts: (user.channelAccounts as { gmail?: string; instagram?: string; linkedin?: string }) ?? {},
+    summary: { messagedThisWeek, repliedThisWeek, waiting: openReplies.length },
+    openReplies: openReplies.map((r) => ({
+      id: r.id,
+      businessName: r.lead.businessName,
+      channel: r.channel,
+      label: r.label,
+      text: r.text,
+      receivedAt: r.receivedAt.toISOString(),
+    })),
+    waitingForReply: waitingForReply.map((t) => ({
+      touchId: t.id,
+      leadId: t.leadId,
+      businessName: t.lead.businessName,
+      channel: t.channel,
+      occurredAt: t.occurredAt.toISOString(),
+    })),
+  };
+}
+
 export async function getReplyDetail(replyId: string) {
   const { reply } = await loadReplyForUser(replyId);
   const [touches, priorReplies, openDeal] = await Promise.all([

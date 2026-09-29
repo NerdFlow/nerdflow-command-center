@@ -85,7 +85,7 @@ export function LeadGenRunner({ campaignId }: { campaignId: string }) {
 
       <p className="text-xs text-muted mb-3">
         {estimatedCost === "loading" && "Estimating cost…"}
-        {estimatedCost === null && "AI unavailable — this feature needs GEMINI_API_KEY configured."}
+        {estimatedCost === null && "Needs GOOGLE_PLACES_API_KEY (for discovery) or GEMINI_API_KEY (for fit-scoring) configured."}
         {typeof estimatedCost === "number" && `Estimated cost for this run: $${estimatedCost.toFixed(3)}.`}
       </p>
       {maxLeads > 50 && (

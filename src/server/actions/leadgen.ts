@@ -4,12 +4,9 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { writeAuditLog } from "@/server/audit";
-import { computeDedupeKey, ruleScore } from "@/server/leads";
-import { discoverBusinessesWithGemini, estimatePreCallCostUsd, AiUnavailableError } from "@/server/ai/client";
-import { extractSiteContact } from "@/server/leadgen/extract";
-import { scoreLead } from "@/server/leadgen/score";
-import { campaignStrategySchema } from "@/server/strategy";
+import { estimatePreCallCostUsd } from "@/server/ai/client";
+import { executeLeadDiscoveryRun, queriesFor } from "@/server/leadgen/run";
+import { googlePlacesSource, PLACES_COST_PER_REQUEST_USD, PLACES_PAGE_SIZE } from "@/server/leadgen/sources/googlePlaces";
 
 const MAX_LEADS_PER_RUN = 1000;
 
@@ -31,41 +28,31 @@ async function loadCampaignForRun(campaignId: string) {
   return { user, campaign };
 }
 
-function queriesFor(strategy: unknown, keywordsOverride: string[]) {
-  if (keywordsOverride.length > 0) return keywordsOverride;
-  const parsed = campaignStrategySchema.safeParse(strategy);
-  return parsed.success && parsed.data.lead_gen.search_queries.length > 0
-    ? parsed.data.lead_gen.search_queries
-    : [];
-}
-
-/** Rough estimate: one discovery call plus one fit-check call per candidate lead. Null when AI is unavailable. */
+/** Rough estimate: Places Text Search requests (paginated) plus one Flash-Lite fit-check per candidate lead. Null when neither is usable. */
 export async function estimateLeadGenRunCostUsd(campaignId: string, maxLeads: number) {
   const { campaign } = await loadCampaignForRun(campaignId);
   const queries = queriesFor(campaign.strategy, []);
-  const discoveryPromptChars = 300 + queries.join("; ").length;
-  const discoveryCost = estimatePreCallCostUsd(discoveryPromptChars, 800);
-  if (discoveryCost === null) return null;
-  const perLeadFitCheckCost = estimatePreCallCostUsd(1200, 300, process.env.AI_MODEL_FAST) ?? 0;
-  return discoveryCost + perLeadFitCheckCost * maxLeads;
+  const queryCount = Math.max(queries.length, 1);
+  const perQueryLeads = Math.ceil(maxLeads / queryCount);
+  const pagesPerQuery = Math.min(3, Math.ceil(perQueryLeads / PLACES_PAGE_SIZE));
+  const placesCost = googlePlacesSource.isConfigured() ? queryCount * pagesPerQuery * PLACES_COST_PER_REQUEST_USD : null;
+
+  const perLeadFitCheckCost = estimatePreCallCostUsd(1200, 300, process.env.AI_MODEL_FAST);
+  if (placesCost === null && perLeadFitCheckCost === null) return null;
+  return (placesCost ?? 0) + (perLeadFitCheckCost ?? 0) * maxLeads;
 }
 
 /**
- * Runs synchronously (no background worker is wired up yet — see
- * docs/CLAUDE_CODE_PHASES.md) and writes progress to the LeadSourceRun row as
- * it goes, so a future polling UI can show it live. Every candidate lands as
- * status "inbox" regardless of score — nothing here can queue or approve a
- * lead; that stays a human action in the Lead Inbox (CLAUDE.md rule 3).
- */
-/**
- * Next.js redacts any error thrown across a Server Action boundary in a
- * production build, replacing it with a generic "Server Components render"
- * message - it can't tell an intentional `throw new Error("Campaign not
- * found")` from a real bug, so it hides both. That only ever showed up as a
- * readable message in `next dev`; production quietly ate it instead. So this
- * function returns a plain object for every outcome, including input
- * validation and permission failures, instead of throwing - the client
- * always gets the real reason.
+ * Runs synchronously (no background worker is wired up yet) and writes
+ * progress to the LeadSourceRun row as it goes, so a future polling UI can
+ * show it live. Every candidate lands as status "inbox" regardless of
+ * score — nothing here can queue or approve a lead; that stays a human
+ * action in the Lead Inbox (CLAUDE.md rule 3).
+ *
+ * Returns a plain result object for every outcome, including input
+ * validation and permission failures, instead of throwing — Next.js
+ * redacts thrown Server Action errors in production builds, so throwing
+ * here would silently become an unreadable generic message on the client.
  */
 export async function startLeadGenRun(campaignId: string, rawInput: z.infer<typeof runInputSchema>) {
   const parsedInput = runInputSchema.safeParse(rawInput);
@@ -81,157 +68,28 @@ export async function startLeadGenRun(campaignId: string, rawInput: z.infer<type
     return failedResult(err instanceof Error ? err.message : "Couldn't load this campaign.");
   }
 
-  const queries = queriesFor(campaign.strategy, input.keywords);
-  const strategy = campaignStrategySchema.safeParse(campaign.strategy);
-  const icp = strategy.success ? strategy.data.icp : null;
-
   let run;
   try {
-    run = await prisma.leadSourceRun.create({
-      data: {
-        organizationId: user.organizationId,
-        campaignId,
-        source: "ai_search",
-        status: "running",
-        locations: [input.location],
-        keywords: queries,
-        maxLeads: input.maxLeads,
-        startedAt: new Date(),
-        narration: "Searching Google for matching businesses…",
-      },
-    });
-  } catch {
-    return failedResult("Couldn't start the run — database error creating the run record.");
-  }
-
-  try {
-    const discovered = await discoverBusinessesWithGemini({
+    run = await executeLeadDiscoveryRun({
       organizationId: user.organizationId,
-      userId: user.id,
-      queries: queries.length > 0 ? queries : [campaign.name],
+      actorUserId: user.id,
+      campaign,
       location: input.location,
-      maxResults: input.maxLeads,
-    });
-
-    await prisma.leadSourceRun.update({
-      where: { id: run.id },
-      data: { found: discovered.length, narration: `Found ${discovered.length} candidates — checking each website…` },
-    });
-
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 180);
-    let created = 0;
-    let duplicates = 0;
-    let rejected = 0;
-
-    for (const business of discovered) {
-      await prisma.leadSourceRun.update({ where: { id: run.id }, data: { currentLocation: input.location, currentKeyword: business.name } });
-
-      const dedupeKey = computeDedupeKey({ business_name: business.name, website: business.website, city: input.location });
-      const existing = await prisma.lead.findFirst({
-        where: {
-          organizationId: user.organizationId,
-          dedupeKey,
-          OR: [{ createdAt: { gte: cutoff } }, { status: "do_not_contact" }, { deals: { some: { stage: { notIn: ["won", "lost"] } } } }],
-        },
-      });
-      if (existing) {
-        duplicates += 1;
-        await prisma.leadSourceRun.update({ where: { id: run.id }, data: { duplicates } });
-        continue;
-      }
-
-      const site = await extractSiteContact(business.website);
-      const rule = ruleScore({
-        business_name: business.name,
-        website: business.website,
-        email: site?.email ?? undefined,
-        phone: site?.phone ?? undefined,
-        instagram_url: site?.instagramUrl ?? undefined,
-        linkedin_url: site?.linkedinUrl ?? undefined,
-      });
-
-      const result = icp
-        ? await scoreLead({
-            organizationId: user.organizationId,
-            userId: user.id,
-            ruleScore: rule,
-            icp,
-            lead: { name: business.name, website: business.website, extractedText: site?.textSample ?? "" },
-          })
-        : { score: rule, reasons: [], flags: ["No ICP set for this campaign yet — rule score only"], disqualified: false, source: "rules_only" as const };
-
-      if (result.disqualified) {
-        rejected += 1;
-        await prisma.leadSourceRun.update({ where: { id: run.id }, data: { rejectedAuto: rejected } });
-        continue;
-      }
-
-      await prisma.lead.create({
-        data: {
-          organizationId: user.organizationId,
-          campaignId,
-          ownerId: campaign.ownerId,
-          businessName: site?.title || business.name,
-          city: input.location,
-          website: business.website,
-          email: site?.email ?? null,
-          phone: site?.phone ?? null,
-          instagramUrl: site?.instagramUrl ?? null,
-          linkedinUrl: site?.linkedinUrl ?? null,
-          source: "ai_search",
-          sourceUrl: business.sourceUrl,
-          sourceRunId: run.id,
-          fitScore: result.score,
-          fitReasons: result.reasons,
-          fitFlags: result.flags,
-          dedupeKey,
-          status: "inbox",
-        },
-      });
-      created += 1;
-      await prisma.leadSourceRun.update({ where: { id: run.id }, data: { new: created, enriched: created, matchedIcp: created } });
-    }
-
-    const costAgg = await prisma.aiUsage.aggregate({
-      where: { organizationId: user.organizationId, createdAt: { gte: run.startedAt }, feature: { in: ["lead_discovery", "scoring"] } },
-      _sum: { costUsd: true },
-    });
-
-    await prisma.leadSourceRun.update({
-      where: { id: run.id },
-      data: {
-        status: "completed",
-        finishedAt: new Date(),
-        narration: `Done — ${created} new, ${duplicates} duplicates, ${rejected} rejected.`,
-        costUsd: costAgg._sum.costUsd ?? 0,
-      },
-    });
-
-    await writeAuditLog({
-      organizationId: user.organizationId,
-      actorId: user.id,
-      action: "lead_gen_run_completed",
-      entityType: "campaign",
-      entityId: campaignId,
-      after: { found: discovered.length, new: created, duplicates, rejected, costUsd: Number(costAgg._sum.costUsd ?? 0) },
+      maxLeads: input.maxLeads,
+      keywordsOverride: input.keywords,
     });
   } catch (err) {
-    const message = err instanceof AiUnavailableError ? err.message : err instanceof Error ? err.message : "unexpected error";
-    await prisma.leadSourceRun.update({
-      where: { id: run.id },
-      data: { status: "failed", finishedAt: new Date(), error: message, narration: `Failed: ${message}` },
-    });
+    return failedResult(err instanceof Error ? err.message : "Couldn't start the run.");
   }
 
   try {
     revalidatePath(`/campaigns/${campaignId}`);
     revalidatePath("/lead-generation");
     revalidatePath("/leads");
-    return await getLeadGenRun(run.id);
-  } catch (err) {
-    return failedResult(err instanceof Error ? err.message : "Run finished, but couldn't reload its status.");
+  } catch {
+    // best-effort — the run itself already completed
   }
+  return run;
 }
 
 export async function getLeadGenRun(runId: string) {
