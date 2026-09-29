@@ -76,8 +76,13 @@ export async function logTouchOutcome(params: {
       await prisma.lead.update({ where: { id: lead.id }, data: { status: "replied" } });
       return null;
     }
+    if (params.outcome === "wrong_number") {
+      // Product doc v2: "Flags lead; sends back to review" rather than continuing the cadence.
+      await prisma.lead.update({ where: { id: lead.id }, data: { status: "inbox" } });
+      return null;
+    }
 
-    // sent / no_answer / talked_not_now — advance the cadence, with an optional channel handoff
+    // sent / no_answer / voicemail / talked_not_now — advance the cadence, with an optional channel handoff
     const strategy = lead.campaign.strategy as unknown as CampaignStrategy;
     const cadence = strategy?.cadence ?? [];
     const currentStepDef = cadence[step];

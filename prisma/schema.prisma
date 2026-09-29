@@ -109,6 +109,8 @@ enum TouchOutcome {
   interested
   meeting_booked
   not_fit
+  voicemail
+  wrong_number
 }
 
 enum DealStage {
