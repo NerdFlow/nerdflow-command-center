@@ -20,7 +20,7 @@ Homepage text (may be incomplete or irrelevant to their actual business — judg
 ${input.lead.extractedText || "(homepage could not be fetched)"}
 </untrusted_lead>
 
-Return JSON: {"fit_score": 0-100, "fit_reasons": ["max 3 short reasons"], "fit_flags": ["max 3 problems"], "disqualified": boolean, "disqualify_reason": "string or empty"}
+Return JSON: {"fit_score": 0-100, "fit_reasons": ["max 3 short reasons, as plain sentences a rep would read - never raw field/signal names or snake_case"], "fit_flags": ["max 3 problems, same plain-sentence style"], "disqualified": boolean, "disqualify_reason": "string or empty"}
 Score 70+ only when the business type clearly fits the ICP and the homepage text supports it.
 If the homepage could not be fetched, say so as a fit_flag and score conservatively — do not guess.
 `.trim();

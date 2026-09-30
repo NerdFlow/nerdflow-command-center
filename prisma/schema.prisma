@@ -193,6 +193,7 @@ enum AiFeature {
   close_out_summary
   lead_discovery
   research
+  live_coaching
 }
 
 enum NotificationChannel {

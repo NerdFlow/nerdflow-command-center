@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { Btn, Chip } from "@/components/ui";
 import { approveLead, rejectLead, bulkApproveAboveScore, bulkRejectNoChannel } from "@/server/actions/leads";
 import { LEAD_REJECT_REASONS } from "@/server/leads";
+import { humanizeTag } from "@/lib/text";
 
 type LeadRow = {
   id: string;
@@ -120,7 +121,7 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
                       ))}
                     {lead.fitFlags.map((f) => (
                       <Chip key={f} tone="stop">
-                        {f}
+                        {humanizeTag(f)}
                       </Chip>
                     ))}
                   </div>

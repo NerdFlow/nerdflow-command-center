@@ -1,9 +1,12 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { campaignStrategySchema } from "@/server/strategy";
+import { callClaudeJSON, AiUnavailableError } from "@/server/ai/client";
+import { SYSTEM_PROMPT as COACHING_SYSTEM_PROMPT, buildUserPrompt as buildCoachingPrompt } from "@/server/ai/prompts/live-coaching";
 
 const PROVEN_MIN_USES = 8;
 const PROVEN_MIN_RATE = 0.6;
@@ -54,4 +57,58 @@ export async function recordObjectionFeedback(objectionResponseId: string, outco
   await prisma.objectionResponse.update({ where: { id: objectionResponseId }, data: { uses, keptTalkingCount, lostCount, status } });
   revalidatePath("/focus");
   revalidatePath("/whats-working");
+}
+
+const liveCoachingSchema = z.object({ response: z.string() });
+
+function fallbackResponse(leadSaid: string, playbookObjections: { question: string; answer: string }[]): string {
+  const said = leadSaid.toLowerCase();
+  let best: { answer: string; overlap: number } | null = null;
+  for (const o of playbookObjections) {
+    const words = o.question.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+    const overlap = words.filter((w) => said.includes(w)).length;
+    if (overlap > 0 && (!best || overlap > best.overlap)) best = { answer: o.answer, overlap };
+  }
+  if (best) return best.answer;
+  return "Ask one clarifying question before responding — you don't have a saved answer for this yet, so don't guess at facts.";
+}
+
+/** Focus mode "They said... / Get response" - live in-call coaching. Falls back to a keyword match against the campaign's own playbook if AI is unavailable, per the product rule that the UI must work when AI is down. */
+export async function getLiveObjectionResponse(input: {
+  campaignId: string;
+  leadSaid: string;
+  businessName: string;
+  contactFirstName: string;
+}): Promise<{ response: string; source: "ai" | "fallback" }> {
+  const user = await requireUser();
+  const campaign = await prisma.campaign.findFirst({ where: { id: input.campaignId, organizationId: user.organizationId } });
+  if (!campaign) throw new Error("Campaign not found");
+
+  const strategy = campaignStrategySchema.safeParse(campaign.strategy);
+  const objections = strategy.success ? strategy.data.objections : [];
+  const productName = strategy.success ? strategy.data.summary : campaign.name;
+
+  try {
+    const result = await callClaudeJSON({
+      feature: "live_coaching",
+      system: COACHING_SYSTEM_PROMPT,
+      prompt: buildCoachingPrompt({
+        productName,
+        businessName: input.businessName,
+        contactFirstName: input.contactFirstName,
+        objections,
+        leadSaid: input.leadSaid,
+      }),
+      schema: liveCoachingSchema,
+      organizationId: user.organizationId,
+      userId: user.id,
+      maxTokens: 300,
+    });
+    return { response: result.response, source: "ai" };
+  } catch (e) {
+    if (e instanceof AiUnavailableError || e instanceof Error) {
+      return { response: fallbackResponse(input.leadSaid, objections), source: "fallback" };
+    }
+    throw e;
+  }
 }

@@ -30,6 +30,7 @@ export default async function FocusPage() {
       fitScore: lead.fitScore,
       fitReasons: (lead.fitReasons as string[] | null) ?? [],
       fitFlags: (lead.fitFlags as string[] | null) ?? [],
+      source: lead.source,
     },
     campaign: {
       id: campaign.id,

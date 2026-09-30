@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Chip } from "@/components/ui";
 import { logTouchOutcome } from "@/server/actions/touches";
-import { getObjectionResponses, recordObjectionFeedback } from "@/server/actions/objections";
+import { getObjectionResponses, recordObjectionFeedback, getLiveObjectionResponse } from "@/server/actions/objections";
 import { renderMessage, type CampaignStrategy } from "@/server/strategy";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
-import type { Channel, TouchOutcome } from "@prisma/client";
+import { humanizeTag } from "@/lib/text";
+import type { Channel, TouchOutcome, LeadSource } from "@prisma/client";
 
 type Card = {
   lead: {
@@ -30,6 +31,7 @@ type Card = {
     fitScore: number;
     fitReasons: string[];
     fitFlags: string[];
+    source: LeadSource;
   };
   campaign: { id: string; name: string; productName: string; strategy: CampaignStrategy };
   label: string;
@@ -40,6 +42,17 @@ const CHANNEL_LABEL: Record<Channel, string> = {
   call: "Call",
   instagram: "Instagram DM",
   linkedin: "LinkedIn DM",
+};
+
+const SOURCE_LABEL: Partial<Record<LeadSource, string>> = {
+  google_places: "Google Places",
+  csv: "CSV import",
+  manual: "Manually added",
+  ai_search: "AI search",
+  open_data: "Open data",
+  apollo: "Apollo",
+  openclaw: "OpenClaw",
+  portfolio_agent: "Portfolio agent",
 };
 
 type OutcomeDef = { outcome: TouchOutcome; label: string; key: string; variant: "default" | "go" | "stop" };
@@ -104,6 +117,7 @@ export function FocusClient({
   // a lead whose next touch is on a channel this rep doesn't work never enters their queue.
   const [cards, setCards] = useState(() => initialCards.filter((c) => allowedChannels.includes(cardChannel(c))));
   const [channelFilter, setChannelFilter] = useState<Channel | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState<LeadSource | "all">("all");
   const [draft, setDraft] = useState("");
   const [pastedOutcome, setPastedOutcome] = useState<TouchOutcome | null>(null);
   const [pastedMessage, setPastedMessage] = useState("");
@@ -117,6 +131,9 @@ export function FocusClient({
   const [objections, setObjections] = useState<Awaited<ReturnType<typeof getObjectionResponses>>>([]);
   const [activeObjectionId, setActiveObjectionId] = useState<string | null>(null);
   const [objectionFeedback, setObjectionFeedback] = useState<Record<string, "kept_talking" | "lost">>({});
+  const [theySaid, setTheySaid] = useState("");
+  const [coachingBusy, setCoachingBusy] = useState(false);
+  const [coachingResponse, setCoachingResponse] = useState<{ response: string; source: "ai" | "fallback" } | null>(null);
 
   // Session setup gate — matches the product doc's "pick a channel + length, then go full-screen" flow.
   const [started, setStarted] = useState(false);
@@ -147,9 +164,16 @@ export function FocusClient({
   }, [cards, repTimezone, businessHoursOnly]);
 
   const visibleCards = useMemo(() => {
-    const pool = channelFilter === "all" ? callable : callable.filter((c) => cardChannel(c) === channelFilter);
+    let pool = channelFilter === "all" ? callable : callable.filter((c) => cardChannel(c) === channelFilter);
+    if (sourceFilter !== "all") pool = pool.filter((c) => c.lead.source === sourceFilter);
     return pool;
-  }, [callable, channelFilter]);
+  }, [callable, channelFilter, sourceFilter]);
+
+  const sourcesPresent = useMemo(() => {
+    const set = new Set<LeadSource>();
+    for (const c of cards) set.add(c.lead.source);
+    return Array.from(set);
+  }, [cards]);
 
   const current = visibleCards[0];
   const outOfHoursCallCount = cards.length - callable.length;
@@ -176,7 +200,27 @@ export function FocusClient({
     setNotes("");
     setObjectionFeedback({});
     setActiveObjectionId(null);
+    setTheySaid("");
+    setCoachingResponse(null);
   }, [current, channel, me]);
+
+  async function getCoaching() {
+    if (!current || !theySaid.trim()) return;
+    setCoachingBusy(true);
+    try {
+      const result = await getLiveObjectionResponse({
+        campaignId: current.campaign.id,
+        leadSaid: theySaid,
+        businessName: current.lead.businessName,
+        contactFirstName: firstNameOf(current.lead.contactName),
+      });
+      setCoachingResponse(result);
+    } catch {
+      setCoachingResponse({ response: "Couldn't reach Flow — try rephrasing or check your connection.", source: "fallback" });
+    } finally {
+      setCoachingBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!current) return;
@@ -221,7 +265,8 @@ export function FocusClient({
 
   function startSession(ch: Channel | "all") {
     if (ch !== "all") setChannelFilter(ch);
-    const pool = ch === "all" ? callable : callable.filter((c) => cardChannel(c) === ch);
+    let pool = ch === "all" ? callable : callable.filter((c) => cardChannel(c) === ch);
+    if (sourceFilter !== "all") pool = pool.filter((c) => c.lead.source === sourceFilter);
     setSessionTotal(pool.length);
     setTouchesLogged(0);
     setConversations(0);
@@ -370,6 +415,23 @@ export function FocusClient({
             />
             <span className="text-sm text-body">Only show call leads in their local business hours</span>
           </label>
+          {sourcesPresent.length > 1 && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted uppercase tracking-widest">Lead source</p>
+              <select
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value as LeadSource | "all")}
+                className="w-full text-sm border border-rule rounded-xl px-3 py-2 bg-panel2"
+              >
+                <option value="all">All sources</option>
+                {sourcesPresent.map((s) => (
+                  <option key={s} value={s}>
+                    {SOURCE_LABEL[s] ?? s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="flex gap-3">
             <button
               onClick={() => startSession(setupChannel)}
@@ -401,6 +463,20 @@ export function FocusClient({
           <input type="checkbox" checked={businessHoursOnly} onChange={(e) => setBusinessHoursOnly(e.target.checked)} className="accent-[var(--accent)]" />
           <span className="text-xs text-muted">Business hours only</span>
         </label>
+        {sourcesPresent.length > 1 && (
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value as LeadSource | "all")}
+            className="text-xs border border-rule rounded-lg px-2 py-1.5 bg-panel2"
+          >
+            <option value="all">All sources</option>
+            {sourcesPresent.map((s) => (
+              <option key={s} value={s}>
+                {SOURCE_LABEL[s] ?? s}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="text-sm text-muted">
           <span className="font-semibold text-ink">{touchesLogged}</span> / {sessionTotal} {channelFilter === "call" || channelFilter === "all" ? "calls" : "touches"}
         </span>
@@ -499,12 +575,12 @@ export function FocusClient({
             <div className="flex flex-wrap gap-1.5">
               {current.lead.fitReasons.map((s) => (
                 <span key={s} className="text-[11px] bg-accent-soft text-accent border border-accent/20 rounded-full px-2.5 py-0.5">
-                  {s}
+                  {humanizeTag(s)}
                 </span>
               ))}
               {current.lead.fitFlags.map((g) => (
                 <span key={g} className="text-[11px] bg-panel2 text-muted rounded-full px-2.5 py-0.5">
-                  {g}
+                  {humanizeTag(g)}
                 </span>
               ))}
             </div>
@@ -699,6 +775,30 @@ export function FocusClient({
               })}
             </div>
           )}
+
+          <div className="border-t border-rule pt-4 space-y-2">
+            <p className="text-[10px] text-muted uppercase tracking-widest">They said...</p>
+            <textarea
+              value={theySaid}
+              onChange={(e) => setTheySaid(e.target.value)}
+              placeholder="Type what the lead said..."
+              rows={3}
+              className="w-full bg-panel2 border border-rule rounded-lg p-2.5 text-sm placeholder-muted resize-none focus:outline-none focus:border-accent/40"
+            />
+            <button
+              onClick={getCoaching}
+              disabled={!theySaid.trim() || coachingBusy}
+              className="text-xs text-accent border border-accent/30 rounded-lg px-3 py-1.5 hover:bg-accent-soft transition-colors disabled:opacity-40"
+            >
+              {coachingBusy ? "Thinking…" : "Get response"}
+            </button>
+            {coachingResponse && (
+              <div className="bg-accent-soft border border-accent/20 rounded-xl p-3 space-y-1">
+                <p className="text-sm leading-relaxed">{coachingResponse.response}</p>
+                {coachingResponse.source === "fallback" && <p className="text-[10px] text-muted">AI unavailable — matched from your saved playbook.</p>}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
