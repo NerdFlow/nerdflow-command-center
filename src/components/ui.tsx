@@ -17,12 +17,16 @@ export function Btn({
   variant = "default",
   size = "md",
   className,
+  loading,
+  disabled,
+  children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "go" | "stop" | "ghost";
   size?: "sm" | "md";
+  loading?: boolean;
 }) {
-  const base = "border rounded-lg font-medium disabled:opacity-55 disabled:cursor-default transition-colors";
+  const base = "border rounded-lg font-medium disabled:opacity-55 disabled:cursor-default transition-colors inline-flex items-center justify-center gap-1.5";
   const sizes = size === "sm" ? "px-2.5 py-1.5 text-[13px]" : "px-3.5 py-2 text-sm";
   const variants: Record<string, string> = {
     default: "bg-panel border-rule text-ink hover:border-accent",
@@ -31,7 +35,17 @@ export function Btn({
     stop: "bg-panel border-rule text-stop hover:border-stop",
     ghost: "bg-transparent border-transparent text-muted hover:bg-panel2 hover:text-ink",
   };
-  return <button className={cx(base, sizes, variants[variant], className)} {...props} />;
+  return (
+    <button className={cx(base, sizes, variants[variant], className)} disabled={disabled || loading} {...props}>
+      {loading && (
+        <svg className="btn-spinner shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+          <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      )}
+      {children}
+    </button>
+  );
 }
 
 export function Chip({

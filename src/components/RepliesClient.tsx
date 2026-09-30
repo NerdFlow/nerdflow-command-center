@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import {
   getReplyDetail,
   classifyReply,
@@ -278,6 +279,7 @@ function DraftPanel({
   initialDraft: string | null;
   onHandled: () => void;
 }) {
+  const toast = useToast();
   const [label, setLabel] = useState(initialLabel);
   const [draft, setDraft] = useState(initialDraft);
   const [classifying, setClassifying] = useState(false);
@@ -326,11 +328,12 @@ function DraftPanel({
     }
   }
 
-  async function run(key: string, fn: () => Promise<unknown>) {
+  async function run(key: string, fn: () => Promise<unknown>, successMessage: string) {
     setBusy(key);
     setError(null);
     try {
       await fn();
+      toast(successMessage);
       onHandled();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -352,7 +355,7 @@ function DraftPanel({
       <Panel>
         <p className="text-sm mb-3">This reply asked to stop being contacted.</p>
         {error && <p className="text-sm text-stop mb-2">{error}</p>}
-        <Btn variant="stop" disabled={busy === "unsub"} onClick={() => run("unsub", () => applyUnsubscribe(replyId))}>
+        <Btn variant="stop" loading={busy === "unsub"} onClick={() => run("unsub", () => applyUnsubscribe(replyId), "Marked do-not-contact.")}>
           {busy === "unsub" ? "Applying…" : "Set do-not-contact"}
         </Btn>
       </Panel>
@@ -399,13 +402,13 @@ function DraftPanel({
       <Panel>
         <p className="text-xs text-muted uppercase tracking-wide mb-2">Actions</p>
         <div className="flex flex-wrap gap-2">
-          <Btn variant="go" disabled={busy !== null} onClick={() => run("sent", () => markReplySent(replyId))}>
+          <Btn variant="go" disabled={busy !== null && busy !== "sent"} loading={busy === "sent"} onClick={() => run("sent", () => markReplySent(replyId), "Marked as sent.")}>
             {busy === "sent" ? "Marking…" : "Mark as sent"}
           </Btn>
           <Btn variant="ghost" disabled={busy !== null} onClick={() => setShowMeeting((s) => !s)}>
             Book meeting
           </Btn>
-          <Btn variant="ghost" disabled={busy !== null} onClick={() => run("snooze", () => snoozeReply(replyId))}>
+          <Btn variant="ghost" disabled={busy !== null && busy !== "snooze"} loading={busy === "snooze"} onClick={() => run("snooze", () => snoozeReply(replyId), "Snoozed.")}>
             {busy === "snooze" ? "Snoozing…" : "Snooze"}
           </Btn>
           <Btn variant="stop" disabled={busy !== null} onClick={() => setShowClose((s) => !s)}>
@@ -430,8 +433,9 @@ function DraftPanel({
             <Btn
               size="sm"
               variant="primary"
-              disabled={!meetingAt || busy !== null}
-              onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote))}
+              disabled={!meetingAt}
+              loading={busy === "meeting"}
+              onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote), "Meeting booked.")}
             >
               {busy === "meeting" ? "Booking…" : "Confirm meeting"}
             </Btn>
@@ -444,10 +448,10 @@ function DraftPanel({
               <button
                 key={r.value}
                 disabled={busy !== null}
-                className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-panel2"
-                onClick={() => run("close", () => closeLeadFromReply(replyId, r.value))}
+                className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-panel2 disabled:opacity-40"
+                onClick={() => run("close", () => closeLeadFromReply(replyId, r.value), "Lead closed.")}
               >
-                {r.label}
+                {busy === "close" ? "Closing…" : r.label}
               </button>
             ))}
           </div>
@@ -466,6 +470,7 @@ function LogReplyModal({
   onClose: () => void;
   onLogged: () => void;
 }) {
+  const toast = useToast();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ id: string; businessName: string; city: string | null }[]>([]);
   const [leadId, setLeadId] = useState<string | null>(prefillLead?.id ?? null);
@@ -492,6 +497,7 @@ function LogReplyModal({
     setError(null);
     try {
       await logManualReply(leadId, channel, text);
+      toast("Reply logged.");
       onLogged();
       onClose();
     } catch (e) {
@@ -553,7 +559,7 @@ function LogReplyModal({
             />
             {error && <p className="text-sm text-stop">{error}</p>}
             <div className="flex gap-2">
-              <Btn variant="primary" disabled={!text.trim() || busy} onClick={submit}>
+              <Btn variant="primary" disabled={!text.trim()} loading={busy} onClick={submit}>
                 {busy ? "Logging…" : "Log reply"}
               </Btn>
               <Btn variant="ghost" onClick={onClose}>

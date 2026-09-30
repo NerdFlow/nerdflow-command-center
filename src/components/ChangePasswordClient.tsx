@@ -47,7 +47,7 @@ export function ChangePasswordClient() {
       </label>
       {error && <p className="text-sm text-stop">{error}</p>}
       {done && <p className="text-sm text-go">Password updated.</p>}
-      <Btn variant="primary" disabled={!currentPassword || !newPassword || !confirmPassword || submitting} onClick={submit}>
+      <Btn variant="primary" disabled={!currentPassword || !newPassword || !confirmPassword} loading={submitting} onClick={submit}>
         {submitting ? "Saving…" : "Update password"}
       </Btn>
     </div>

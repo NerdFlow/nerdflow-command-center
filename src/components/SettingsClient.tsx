@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Btn, Panel } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import { updateOrgSettings } from "@/server/actions/admin";
 
 type Settings = {
@@ -13,6 +14,7 @@ type Settings = {
 };
 
 export function SettingsClient({ settings }: { settings: Settings }) {
+  const toast = useToast();
   const [form, setForm] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -64,13 +66,14 @@ export function SettingsClient({ settings }: { settings: Settings }) {
       {error && <p className="text-sm text-stop">{error}</p>}
       <Btn
         variant="primary"
-        disabled={saving}
+        loading={saving}
         onClick={async () => {
           setSaving(true);
           setError(null);
           try {
             await updateOrgSettings({ ...form, workingHoursDefault: { ...form.workingHoursDefault, days: [1, 2, 3, 4, 5] } });
             setSaved(true);
+            toast("Settings saved.");
           } catch (e) {
             setError(e instanceof Error ? e.message : "Couldn't save settings.");
           } finally {

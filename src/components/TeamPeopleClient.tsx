@@ -3,6 +3,7 @@
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import { addPerson, changeUserRole, setUserStatus, setTarget } from "@/server/actions/admin";
 import { METRIC_LABEL } from "@/server/targets";
 import type { Role, TargetMetric, UserStatus } from "@prisma/client";
@@ -22,6 +23,7 @@ type TeamUser = {
 
 export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState({ email: "", fullName: "", role: "rep" as Role });
@@ -31,11 +33,12 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
   const [rowBusyId, setRowBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
 
-  async function runRow(id: string, fn: () => Promise<unknown>) {
+  async function runRow(id: string, fn: () => Promise<unknown>, successMessage: string) {
     setRowBusyId(id);
     setRowError(null);
     try {
       await fn();
+      toast(successMessage);
       refresh();
     } catch (e) {
       setRowError(e instanceof Error ? e.message : "Something went wrong.");
@@ -88,7 +91,8 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
           <Btn
             size="sm"
             variant="primary"
-            disabled={!form.email || !form.fullName || busy}
+            disabled={!form.email || !form.fullName}
+            loading={busy}
             onClick={async () => {
               setBusy(true);
               setError(null);
@@ -150,7 +154,7 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
                       className="border border-rule rounded px-1.5 py-1 bg-panel text-xs"
                       value={u.role}
                       disabled={rowBusyId === u.id}
-                      onChange={(e) => runRow(u.id, () => changeUserRole(u.id, e.target.value as Role))}
+                      onChange={(e) => runRow(u.id, () => changeUserRole(u.id, e.target.value as Role), "Role updated.")}
                     >
                       {ROLES.map((r) => (
                         <option key={r} value={r}>
@@ -170,7 +174,13 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
                       <button
                         className="text-xs text-stop disabled:opacity-40"
                         disabled={rowBusyId === u.id}
-                        onClick={() => runRow(u.id, () => setUserStatus(u.id, u.status === "deactivated" ? "active" : "deactivated"))}
+                        onClick={() =>
+                          runRow(
+                            u.id,
+                            () => setUserStatus(u.id, u.status === "deactivated" ? "active" : "deactivated"),
+                            u.status === "deactivated" ? "Reactivated." : "Deactivated.",
+                          )
+                        }
                       >
                         {u.status === "deactivated" ? "Reactivate" : "Deactivate"}
                       </button>
@@ -205,6 +215,7 @@ function TargetEditor({
   targets: { id: string; metric: TargetMetric; dailyValue: number; effectiveFrom: string }[];
   onSaved: () => void;
 }) {
+  const toast = useToast();
   const latestByMetric = new Map<TargetMetric, number>();
   for (const t of targets) if (!latestByMetric.has(t.metric)) latestByMetric.set(t.metric, t.dailyValue);
   const [values, setValues] = useState<Record<string, string>>(
@@ -232,7 +243,7 @@ function TargetEditor({
       <Btn
         size="sm"
         variant="primary"
-        disabled={saving}
+        loading={saving}
         onClick={async () => {
           setSaving(true);
           setError(null);
@@ -243,6 +254,7 @@ function TargetEditor({
                 await setTarget(userId, m, val);
               }
             }
+            toast("Targets saved.");
             onSaved();
           } catch (e) {
             setError(e instanceof Error ? e.message : "Couldn't save targets.");

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bar, Btn, Chip, Panel, Tabs } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import { STAGE_CHECKLIST, STAGE_LABEL, STAGE_ORDER, type DealFlag } from "@/server/deals";
 import { setChecklistItem, setNextStep, setStage, setDealValue, addDealPerson, togglePersonFlag } from "@/server/actions/deals";
 import type { DealStage, LostReason } from "@prisma/client";
@@ -47,6 +48,7 @@ export function DealDetail({
   timeline: TimelineItem[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [tab, setTab] = useState("timeline");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [checklistError, setChecklistError] = useState<string | null>(null);
@@ -128,6 +130,7 @@ export function DealDetail({
                         setBusyKey(item.key);
                         try {
                           await setChecklistItem(deal.id, item.key, e.target.checked);
+                          toast(e.target.checked ? "Marked done." : "Marked not done.");
                           refresh();
                         } catch (err) {
                           setChecklistError(err instanceof Error ? err.message : "Couldn't save that.");
@@ -207,9 +210,11 @@ export function DealDetail({
 }
 
 function NextStepPanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boolean; onSaved: () => void }) {
+  const toast = useToast();
   const [text, setText] = useState(deal.nextStepText ?? "");
   const [at, setAt] = useState(deal.nextStepAt ? deal.nextStepAt.slice(0, 16) : "");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <Panel>
@@ -228,16 +233,25 @@ function NextStepPanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bo
         disabled={!canEdit}
         onChange={(e) => setAt(e.target.value)}
       />
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       {canEdit && (
         <Btn
           size="sm"
           variant="primary"
-          disabled={!text || !at || saving}
+          disabled={!text || !at}
+          loading={saving}
           onClick={async () => {
             setSaving(true);
-            await setNextStep(deal.id, text, new Date(at).toISOString());
-            setSaving(false);
-            onSaved();
+            setError(null);
+            try {
+              await setNextStep(deal.id, text, new Date(at).toISOString());
+              toast("Next step saved.");
+              onSaved();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Couldn't save that.");
+            } finally {
+              setSaving(false);
+            }
           }}
         >
           {saving ? "Saving…" : "Save"}
@@ -248,13 +262,30 @@ function NextStepPanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bo
 }
 
 function PeoplePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boolean; onSaved: () => void }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [adding, setAdding] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle(personId: string, field: "isDecisionMaker" | "met", checked: boolean) {
+    setBusyId(personId);
+    setError(null);
+    try {
+      await togglePersonFlag(deal.id, personId, field, checked);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save that.");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <Panel>
       <h3 className="text-sm font-medium mb-2">People</h3>
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       {deal.people.map((p) => (
         <div key={p.id} className="text-sm mb-2 border-b border-rule pb-2 last:border-0">
           <div className="font-medium">
@@ -266,11 +297,8 @@ function PeoplePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bool
                 type="checkbox"
                 className="accent-accent"
                 checked={p.isDecisionMaker}
-                disabled={!canEdit}
-                onChange={async (e) => {
-                  await togglePersonFlag(deal.id, p.id, "isDecisionMaker", e.target.checked);
-                  onSaved();
-                }}
+                disabled={!canEdit || busyId === p.id}
+                onChange={(e) => toggle(p.id, "isDecisionMaker", e.target.checked)}
               />
               Decision-maker
             </label>
@@ -279,11 +307,8 @@ function PeoplePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bool
                 type="checkbox"
                 className="accent-accent"
                 checked={p.met}
-                disabled={!canEdit}
-                onChange={async (e) => {
-                  await togglePersonFlag(deal.id, p.id, "met", e.target.checked);
-                  onSaved();
-                }}
+                disabled={!canEdit || busyId === p.id}
+                onChange={(e) => toggle(p.id, "met", e.target.checked)}
               />
               Met
             </label>
@@ -296,14 +321,22 @@ function PeoplePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bool
           <input className="flex-1 border border-rule rounded-lg px-2 py-1.5 bg-bg text-sm" placeholder="Role" value={role} onChange={(e) => setRole(e.target.value)} />
           <Btn
             size="sm"
-            disabled={!name || adding}
+            disabled={!name}
+            loading={adding}
             onClick={async () => {
               setAdding(true);
-              await addDealPerson(deal.id, { name, role: role || undefined });
-              setName("");
-              setRole("");
-              setAdding(false);
-              onSaved();
+              setError(null);
+              try {
+                await addDealPerson(deal.id, { name, role: role || undefined });
+                setName("");
+                setRole("");
+                toast("Person added.");
+                onSaved();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Couldn't add that person.");
+              } finally {
+                setAdding(false);
+              }
             }}
           >
             Add
@@ -315,7 +348,10 @@ function PeoplePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: bool
 }
 
 function ValuePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boolean; onSaved: () => void }) {
+  const toast = useToast();
   const [value, setValue] = useState(deal.valueMonthlyUsd?.toString() ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
     <Panel>
       <h3 className="text-sm font-medium mb-2">Value (monthly USD)</h3>
@@ -330,23 +366,36 @@ function ValuePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boole
         {canEdit && (
           <Btn
             size="sm"
+            loading={saving}
             onClick={async () => {
-              await setDealValue(deal.id, value ? Number(value) : null);
-              onSaved();
+              setSaving(true);
+              setError(null);
+              try {
+                await setDealValue(deal.id, value ? Number(value) : null);
+                toast("Value saved.");
+                onSaved();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Couldn't save that.");
+              } finally {
+                setSaving(false);
+              }
             }}
           >
             Save
           </Btn>
         )}
       </div>
+      {error && <p className="text-sm text-stop mt-2">{error}</p>}
     </Panel>
   );
 }
 
 function StagePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boolean; onSaved: () => void }) {
+  const toast = useToast();
   const [stage, setStageValue] = useState<DealStage>(deal.stage);
   const [lostReason, setLostReason] = useState<LostReason>("price");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <Panel>
@@ -372,16 +421,24 @@ function StagePanel({ deal, canEdit, onSaved }: { deal: DealData; canEdit: boole
           ))}
         </select>
       )}
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
       {canEdit && stage !== deal.stage && (
         <Btn
           size="sm"
           variant="primary"
-          disabled={saving}
+          loading={saving}
           onClick={async () => {
             setSaving(true);
-            await setStage(deal.id, stage, stage === "lost" ? lostReason : undefined);
-            setSaving(false);
-            onSaved();
+            setError(null);
+            try {
+              await setStage(deal.id, stage, stage === "lost" ? lostReason : undefined);
+              toast("Stage updated.");
+              onSaved();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Couldn't update the stage.");
+            } finally {
+              setSaving(false);
+            }
           }}
         >
           {saving ? "Saving…" : "Update stage"}

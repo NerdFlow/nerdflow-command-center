@@ -140,7 +140,7 @@ export function ProfileClient({
         {saved && <p className="text-sm text-go">Saved.</p>}
         {error && <p className="text-sm text-stop">{error}</p>}
 
-        <Btn variant="primary" className="w-full justify-center" disabled={saving} onClick={submit}>
+        <Btn variant="primary" className="w-full justify-center" loading={saving} onClick={submit}>
           {saving ? "Saving…" : isSetup ? "Take me to Today" : "Save"}
         </Btn>
       </div>

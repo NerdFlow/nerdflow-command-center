@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Chip, Panel, Tabs } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import type { CampaignStrategy } from "@/server/strategy";
 import {
   updateCampaignStrategy,
@@ -51,6 +52,7 @@ export function CampaignDetail({
   canManage: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [tab, setTab] = useState("overview");
   const [strategy, setStrategy] = useState(campaign.strategy);
   const [dirty, setDirty] = useState(false);
@@ -70,6 +72,7 @@ export function CampaignDetail({
     try {
       await updateCampaignStrategy(campaign.id, strategy);
       setDirty(false);
+      toast("Changes saved.");
       router.refresh();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Couldn't save changes.");
@@ -241,7 +244,7 @@ export function CampaignDetail({
 
           {saveError && <p className="text-sm text-stop">{saveError}</p>}
           {canManage && (
-            <Btn variant="primary" disabled={!dirty || saving} onClick={save}>
+            <Btn variant="primary" disabled={!dirty} loading={saving} onClick={save}>
               {saving ? "Saving…" : "Save changes"}
             </Btn>
           )}
@@ -289,6 +292,7 @@ export function CampaignDetail({
 
 function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canManage: boolean }) {
   const router = useRouter();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
   const [showPause, setShowPause] = useState(false);
@@ -296,11 +300,12 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
 
   if (!canManage) return null;
 
-  async function run(fn: () => Promise<unknown>) {
+  async function run(fn: () => Promise<unknown>, successMessage: string) {
     setBusy(true);
     setError(null);
     try {
       await fn();
+      toast(successMessage);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -325,21 +330,21 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
-          <Btn size="sm" variant="stop" disabled={!reason || busy} onClick={() => run(() => pauseCampaign(campaign.id, reason))}>
+          <Btn size="sm" variant="stop" disabled={!reason} loading={busy} onClick={() => run(() => pauseCampaign(campaign.id, reason), "Campaign paused.")}>
             Confirm pause
           </Btn>
-          <Btn size="sm" variant="ghost" onClick={() => setShowPause(false)}>
+          <Btn size="sm" variant="ghost" disabled={busy} onClick={() => setShowPause(false)}>
             Cancel
           </Btn>
         </div>
       )}
       {campaign.status === "paused" && (
-        <Btn size="sm" variant="go" disabled={busy} onClick={() => run(() => resumeCampaign(campaign.id))}>
+        <Btn size="sm" variant="go" loading={busy} onClick={() => run(() => resumeCampaign(campaign.id), "Campaign resumed.")}>
           Resume
         </Btn>
       )}
       {campaign.status !== "archived" && (
-        <Btn size="sm" variant="ghost" disabled={busy} onClick={() => run(() => archiveCampaign(campaign.id))}>
+        <Btn size="sm" variant="ghost" loading={busy} onClick={() => run(() => archiveCampaign(campaign.id), "Campaign archived.")}>
           Archive
         </Btn>
       )}
@@ -391,7 +396,7 @@ function PlaybookEditor({
             </Link>
           )}
           {canManage && (
-            <Btn size="sm" variant="primary" disabled={!dirty || saving} onClick={onSave}>
+            <Btn size="sm" variant="primary" disabled={!dirty} loading={saving} onClick={onSave}>
               {saving ? "Saving…" : "Save"}
             </Btn>
           )}
@@ -410,7 +415,7 @@ function PlaybookEditor({
               onChange={(e) => setChangeRequest(e.target.value)}
               disabled={rethinking}
             />
-            <Btn size="sm" variant="ghost" disabled={rethinking} onClick={() => onRethink(changeRequest)}>
+            <Btn size="sm" variant="ghost" loading={rethinking} onClick={() => onRethink(changeRequest)}>
               {rethinking ? "Thinking…" : "Rethink"}
             </Btn>
           </div>
@@ -696,6 +701,7 @@ function PlaybookEditor({
 
 function KnowledgeTab({ campaignId, docs, canManage }: { campaignId: string; docs: { id: string; title: string; source: string }[]; canManage: boolean }) {
   const router = useRouter();
+  const toast = useToast();
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -722,6 +728,7 @@ function KnowledgeTab({ campaignId, docs, canManage }: { campaignId: string; doc
                   setError(null);
                   try {
                     await deleteKnowledgeDoc(d.id, campaignId);
+                    toast("Doc deleted.");
                     router.refresh();
                   } catch (e) {
                     setError(e instanceof Error ? e.message : "Couldn't delete that doc.");
@@ -745,7 +752,8 @@ function KnowledgeTab({ campaignId, docs, canManage }: { campaignId: string; doc
           <textarea className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mb-3 min-h-[140px]" value={text} onChange={(e) => setText(e.target.value)} />
           <Btn
             variant="primary"
-            disabled={!title || !text || busy}
+            disabled={!title || !text}
+            loading={busy}
             onClick={async () => {
               setBusy(true);
               setError(null);
@@ -753,6 +761,7 @@ function KnowledgeTab({ campaignId, docs, canManage }: { campaignId: string; doc
                 await addKnowledgeDocPaste(campaignId, title, text);
                 setTitle("");
                 setText("");
+                toast("Doc added.");
                 router.refresh();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Couldn't add that doc.");
@@ -779,6 +788,7 @@ function LogTab({
   canManage: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -792,13 +802,15 @@ function LogTab({
           <Btn
             variant="primary"
             size="sm"
-            disabled={!body || busy}
+            disabled={!body}
+            loading={busy}
             onClick={async () => {
               setBusy(true);
               setError(null);
               try {
                 await addCampaignNote(campaignId, body);
                 setBody("");
+                toast("Note added.");
                 router.refresh();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Couldn't add that note.");

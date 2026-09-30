@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
+import { useToast } from "@/components/Toast";
 import { updateProduct, setProductStatus, createProductInSettings } from "@/server/actions/products";
 import type { ProductType, ProductStatus } from "@prisma/client";
 
@@ -10,6 +11,7 @@ type ProductRow = { id: string; name: string; type: ProductType; summary: string
 
 export function ProductsPanel({ products: initialProducts }: { products: ProductRow[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [products, setProducts] = useState(initialProducts);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -29,6 +31,7 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
       await updateProduct(id, form);
       setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...form } : p)));
       setEditingId(null);
+      toast("Product saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save.");
     } finally {
@@ -42,6 +45,7 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
     try {
       await setProductStatus(p.id, next);
       setProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, status: next } : x)));
+      toast(next === "active" ? "Product activated." : "Product archived.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update status.");
     } finally {
@@ -57,6 +61,7 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
       setProducts((prev) => [...prev, { ...created, website: created.website ?? null }]);
       setAdding(false);
       setForm({ name: "", type: "product", summary: "", website: "" });
+      toast("Product created.");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create product.");
@@ -85,7 +90,7 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
           </select>
           <textarea className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" placeholder="Summary" value={form.summary} onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))} />
           <input className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" placeholder="Website (optional)" value={form.website} onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))} />
-          <Btn size="sm" variant="primary" disabled={!form.name || !form.summary || busy === "new"} onClick={create}>
+          <Btn size="sm" variant="primary" disabled={!form.name || !form.summary} loading={busy === "new"} onClick={create}>
             {busy === "new" ? "Creating…" : "Create"}
           </Btn>
         </div>
@@ -104,10 +109,10 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
                 <textarea className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" value={form.summary} onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))} />
                 <input className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" placeholder="Website" value={form.website} onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))} />
                 <div className="flex gap-2">
-                  <Btn size="sm" variant="primary" disabled={busy === p.id} onClick={() => save(p.id)}>
+                  <Btn size="sm" variant="primary" loading={busy === p.id} onClick={() => save(p.id)}>
                     {busy === p.id ? "Saving…" : "Save"}
                   </Btn>
-                  <Btn size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                  <Btn size="sm" variant="ghost" disabled={busy === p.id} onClick={() => setEditingId(null)}>
                     Cancel
                   </Btn>
                 </div>
@@ -125,8 +130,8 @@ export function ProductsPanel({ products: initialProducts }: { products: Product
                   <button className="text-xs text-accent" onClick={() => startEdit(p)}>
                     Edit
                   </button>
-                  <button className="text-xs text-muted" disabled={busy === p.id} onClick={() => toggleStatus(p)}>
-                    {p.status === "active" ? "Archive" : "Reactivate"}
+                  <button className="text-xs text-muted disabled:opacity-40" disabled={busy === p.id} onClick={() => toggleStatus(p)}>
+                    {busy === p.id ? "…" : p.status === "active" ? "Archive" : "Reactivate"}
                   </button>
                 </div>
               </div>

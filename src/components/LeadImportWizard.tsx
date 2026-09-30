@@ -6,11 +6,13 @@ import Papa from "papaparse";
 import { Btn, Panel } from "@/components/ui";
 import { previewLeadImport, commitLeadImport } from "@/server/actions/leads";
 import { ColumnMapper, autoMapFields, applyMapping, type FieldMapping } from "@/components/ColumnMapper";
+import { useToast } from "@/components/Toast";
 
 type PreviewResult = Awaited<ReturnType<typeof previewLeadImport>>;
 
 export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name: string }[] }) {
   const router = useRouter();
+  const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -42,6 +44,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
     try {
       const rows = applyMapping(csvRows, mapping).filter((r) => r.business_name);
       const res = await previewLeadImport(campaignId, rows);
+      if (!res) throw new Error("Preview failed — try reloading the page and importing again.");
       setPreview(res);
       setStep(3);
     } catch (e) {
@@ -57,7 +60,9 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
     try {
       const rows = applyMapping(csvRows, mapping).filter((r) => r.business_name);
       const res = await commitLeadImport(campaignId, rows);
+      if (!res) throw new Error("Import failed — try reloading the page and importing again.");
       setResult(res);
+      toast(`${res.imported} lead${res.imported === 1 ? "" : "s"} imported.`);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't import these leads.");
@@ -142,7 +147,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
               <div className="mb-4">
                 <ColumnMapper headers={headers} mapping={mapping} onChange={setMapping} />
               </div>
-              <Btn variant="primary" disabled={!mapping.business_name || working} onClick={runPreview}>
+              <Btn variant="primary" disabled={!mapping.business_name} loading={working} onClick={runPreview}>
                 {working ? "Checking…" : "Preview and check duplicates"}
               </Btn>
             </div>
@@ -176,7 +181,7 @@ export function LeadImportWizard({ campaigns }: { campaigns: { id: string; name:
                   </tbody>
                 </table>
               </div>
-              <Btn variant="primary" disabled={working} onClick={commit}>
+              <Btn variant="primary" loading={working} onClick={commit}>
                 {working ? "Importing…" : `Import ${preview.total - preview.duplicates} leads`}
               </Btn>
             </div>

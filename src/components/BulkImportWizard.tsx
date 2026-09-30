@@ -6,6 +6,7 @@ import Papa from "papaparse";
 import { Btn, Panel, Chip } from "@/components/ui";
 import { previewLeadImport, commitBulkImport } from "@/server/actions/leads";
 import { ColumnMapper, autoMapFields, applyMapping, type FieldMapping } from "@/components/ColumnMapper";
+import { useToast } from "@/components/Toast";
 
 type PreviewResult = Awaited<ReturnType<typeof previewLeadImport>>;
 type Step = "upload" | "assign" | "map" | "confirm" | "done";
@@ -18,6 +19,7 @@ export function BulkImportWizard({
   reps: { id: string; fullName: string }[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("upload");
@@ -75,6 +77,7 @@ export function BulkImportWizard({
     try {
       const mapped = applyMapping(rows, mapping).filter((r) => r.business_name);
       const res = await previewLeadImport(campaignId, mapped);
+      if (!res) throw new Error("Preview failed — try reloading the page and importing again.");
       setPreview(res);
       setMissingContact(res.rows.filter((r) => !r.isDuplicate && !r.row.email && !r.row.phone).length);
       setStep("confirm");
@@ -97,8 +100,10 @@ export function BulkImportWizard({
         assignment: { mode: assignMode, repIds: assignMode === "single" ? [selectedReps[0]!] : selectedReps },
         sendToReviewFirst,
       });
+      if (!res) throw new Error("Import failed — try reloading the page and importing again.");
       setResult(res);
       setStep("done");
+      toast(`${res.imported} lead${res.imported === 1 ? "" : "s"} imported.`);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't import these leads.");
@@ -220,7 +225,7 @@ export function BulkImportWizard({
           <div className="mb-4">
             <ColumnMapper headers={headers} mapping={mapping} onChange={setMapping} />
           </div>
-          <Btn variant="primary" disabled={!mapping.business_name || working} onClick={runPreview}>
+          <Btn variant="primary" disabled={!mapping.business_name} loading={working} onClick={runPreview}>
             {working ? "Checking…" : "Preview and check duplicates"}
           </Btn>
         </div>
@@ -259,7 +264,7 @@ export function BulkImportWizard({
               </tbody>
             </table>
           </div>
-          <Btn variant="primary" disabled={working} onClick={commit}>
+          <Btn variant="primary" loading={working} onClick={commit}>
             {working ? "Importing…" : `Import ${preview.total - preview.duplicates} leads`}
           </Btn>
         </div>

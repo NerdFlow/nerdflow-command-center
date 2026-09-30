@@ -6,6 +6,7 @@ import { Btn, Chip } from "@/components/ui";
 import { approveLead, rejectLead, bulkApproveAboveScore, bulkRejectNoChannel } from "@/server/actions/leads";
 import { LEAD_REJECT_REASONS } from "@/server/leads";
 import { humanizeTag } from "@/lib/text";
+import { useToast } from "@/components/Toast";
 
 type LeadRow = {
   id: string;
@@ -30,6 +31,7 @@ function scoreTone(score: number): "go" | "default" | "stop" {
 
 export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState<(typeof LEAD_REJECT_REASONS)[number]>(LEAD_REJECT_REASONS[0]);
@@ -65,10 +67,11 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
           onClick={() =>
             run("bulk-approve", async () => {
               const n = await bulkApproveAboveScore(70);
-              alert(`Approved ${n} lead${n === 1 ? "" : "s"} with fit score 70+.`);
+              toast(`Approved ${n} lead${n === 1 ? "" : "s"} with fit score 70+.`);
             })
           }
-          disabled={busy}
+          disabled={busy && busyId !== "bulk-approve"}
+          loading={busyId === "bulk-approve"}
         >
           {busyId === "bulk-approve" ? "Approving…" : "Bulk approve ≥ 70"}
         </Btn>
@@ -78,10 +81,11 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
           onClick={() =>
             run("bulk-reject", async () => {
               const n = await bulkRejectNoChannel();
-              alert(`Rejected ${n} lead${n === 1 ? "" : "s"} with no reachable channel.`);
+              toast(`Rejected ${n} lead${n === 1 ? "" : "s"} with no reachable channel.`);
             })
           }
-          disabled={busy}
+          disabled={busy && busyId !== "bulk-reject"}
+          loading={busyId === "bulk-reject"}
         >
           {busyId === "bulk-reject" ? "Rejecting…" : "Reject: no reachable channel"}
         </Btn>
@@ -165,8 +169,17 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
                         <Btn
                           size="sm"
                           variant="stop"
-                          disabled={busyId === lead.id}
-                          onClick={() => run(lead.id, () => rejectLead(lead.id, reason, note || undefined), () => setRejecting(null))}
+                          loading={busyId === lead.id}
+                          onClick={() =>
+                            run(
+                              lead.id,
+                              () => rejectLead(lead.id, reason, note || undefined),
+                              () => {
+                                setRejecting(null);
+                                toast("Lead rejected.");
+                              },
+                            )
+                          }
                         >
                           {busyId === lead.id ? "Rejecting…" : "Confirm"}
                         </Btn>
@@ -177,7 +190,7 @@ export function LeadInboxTable({ leads }: { leads: LeadRow[] }) {
                     </div>
                   ) : (
                     <div className="flex gap-1.5">
-                      <Btn size="sm" variant="primary" disabled={busyId === lead.id} onClick={() => run(lead.id, () => approveLead(lead.id))}>
+                      <Btn size="sm" variant="primary" loading={busyId === lead.id} onClick={() => run(lead.id, () => approveLead(lead.id), () => toast("Lead approved."))}>
                         {busyId === lead.id ? "Approving…" : "Approve"}
                       </Btn>
                       <Btn size="sm" variant="stop" disabled={busy} onClick={() => setRejecting(lead.id)}>
