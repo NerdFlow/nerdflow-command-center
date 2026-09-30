@@ -8,7 +8,7 @@ import { writeAuditLog } from "@/server/audit";
 import { researchMarketWithGemini, callClaudeJSON, AiUnavailableError } from "@/server/ai/client";
 import { buildResearchPrompt, buildStructurePrompt, STRUCTURE_SYSTEM_PROMPT } from "@/server/ai/prompts/market-research";
 import { SYSTEM_PROMPT as ICP_SYSTEM_PROMPT, buildUserPrompt as buildIcpPrompt } from "@/server/ai/prompts/icp-generation";
-import { generateCampaignStrategy, type CampaignStrategy } from "@/server/strategy";
+import { generateCampaignStrategy, campaignStrategySchema, type CampaignStrategy } from "@/server/strategy";
 
 const researchStructureSchema = z.object({
   market_snapshot: z.string(),
@@ -109,11 +109,11 @@ export async function approveResearch(campaignId: string) {
   return research;
 }
 
-/** Wizard Step 2: ICP generation, grounded only in the *approved* research. */
+/** ICP generation grounded in existing research (no separate approve click). */
 export async function generateIcp(campaignId: string) {
   const { user, campaign } = await loadCampaign(campaignId);
   const research = await prisma.research.findUnique({ where: { campaignId } });
-  if (!research?.approvedAt) throw new Error("Approve the research step first.");
+  if (!research) throw new Error("Run market research first.");
 
   try {
     const result = await callClaudeJSON({
@@ -134,6 +134,14 @@ export async function generateIcp(campaignId: string) {
       maxTokens: 700,
     });
 
+    // Auto-mark research used so older wizard UIs stay consistent.
+    if (!research.approvedAt) {
+      await prisma.research.update({
+        where: { campaignId },
+        data: { approvedById: user.id, approvedAt: new Date() },
+      });
+    }
+
     await prisma.icp.updateMany({ where: { campaignId }, data: { isActive: false } });
     const icp = await prisma.icp.create({
       data: {
@@ -151,11 +159,86 @@ export async function generateIcp(campaignId: string) {
       },
     });
     revalidatePath(`/campaigns/${campaignId}/wizard`);
+    revalidatePath(`/campaigns/${campaignId}`);
     return { source: "ai" as const, icp };
   } catch (err) {
     if (!(err instanceof AiUnavailableError)) throw err;
     return { source: "unavailable" as const, reason: err.message };
   }
+}
+
+/**
+ * One-shot research → who-to-target for campaign create. No approval gates.
+ * Merges ICP keywords into the campaign strategy search queries when AI works.
+ */
+export async function runResearchAndIcp(campaignId: string) {
+  const researchResult = await generateResearch(campaignId);
+  if (researchResult.source !== "ai") {
+    return {
+      ok: false as const,
+      stage: "research" as const,
+      reason: researchResult.reason,
+      research: null,
+      icp: null,
+    };
+  }
+
+  const { user, campaign } = await loadCampaign(campaignId);
+  await prisma.research.update({
+    where: { campaignId },
+    data: { approvedById: user.id, approvedAt: new Date() },
+  });
+
+  const icpResult = await generateIcp(campaignId);
+  if (icpResult.source !== "ai") {
+    return {
+      ok: false as const,
+      stage: "icp" as const,
+      reason: icpResult.reason,
+      research: researchResult.research,
+      icp: null,
+    };
+  }
+
+  const icp = icpResult.icp;
+  const keywords = (icp.keywords as string[]) ?? [];
+  const businessTypes = (icp.businessTypes as string[]) ?? [];
+  const parsed = campaignStrategySchema.safeParse(campaign.strategy);
+  if (parsed.success) {
+    const next: CampaignStrategy = {
+      ...parsed.data,
+      icp: {
+        buyer: ((icp.decisionMakerTitles as string[])[0] as string) || icp.name,
+        business: businessTypes.join(", ") || parsed.data.icp.business,
+        location: campaign.location ?? parsed.data.icp.location,
+        size: icp.sizeSignals ?? parsed.data.icp.size,
+        triggers: (icp.niceToHave as string[]) ?? parsed.data.icp.triggers,
+        disqualifiers: (icp.disqualifiers as string[]) ?? parsed.data.icp.disqualifiers,
+      },
+      lead_gen: {
+        ...parsed.data.lead_gen,
+        search_queries:
+          keywords.length > 0
+            ? keywords.slice(0, 5)
+            : businessTypes.length > 0
+              ? businessTypes.slice(0, 5)
+              : parsed.data.lead_gen.search_queries,
+      },
+    };
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { strategy: next as unknown as object, strategyVersion: { increment: 1 } },
+    });
+  }
+
+  revalidatePath(`/campaigns/${campaignId}`);
+  return {
+    ok: true as const,
+    stage: "done" as const,
+    reason: undefined,
+    research: researchResult.research,
+    icp,
+  };
 }
 
 /** Wizard Step 3: playbook, built around the approved ICP (not a fresh one the model invents). */

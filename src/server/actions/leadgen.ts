@@ -44,10 +44,8 @@ export async function estimateLeadGenRunCostUsd(campaignId: string, maxLeads: nu
 
 /**
  * Runs synchronously (no background worker is wired up yet) and writes
- * progress to the LeadSourceRun row as it goes, so a future polling UI can
- * show it live. Every candidate lands as status "inbox" regardless of
- * score — nothing here can queue or approve a lead; that stays a human
- * action in the Lead Inbox (CLAUDE.md rule 3).
+ * progress to the LeadSourceRun row as it goes. New leads land as
+ * status "queued" for the campaign owner (Focus) — no Lead Inbox gate.
  *
  * Returns a plain result object for every outcome, including input
  * validation and permission failures, instead of throwing — Next.js
@@ -84,8 +82,9 @@ export async function startLeadGenRun(campaignId: string, rawInput: z.infer<type
 
   try {
     revalidatePath(`/campaigns/${campaignId}`);
-    revalidatePath("/lead-generation");
-    revalidatePath("/leads");
+    revalidatePath("/campaigns");
+    revalidatePath("/focus");
+    revalidatePath("/today");
   } catch {
     // best-effort — the run itself already completed
   }

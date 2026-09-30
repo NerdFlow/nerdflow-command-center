@@ -312,10 +312,10 @@ export async function commitBulkImport(input: {
     after: { imported: toInsert.length, duplicates: preview.duplicates, total: input.rawRows.length, fileName: input.fileName },
   });
 
-  revalidatePath("/leads");
-  revalidatePath("/lead-generation");
   revalidatePath("/focus");
   revalidatePath("/today");
+  revalidatePath("/campaigns");
+  revalidatePath(`/campaigns/${input.campaignId}`);
 
   // Detached on purpose — never await this. The import is done and usable now.
   void backgroundEnrichImportedLeads(createdLeadIds, input.campaignId, user.organizationId, runRecord.id).catch(() => {});

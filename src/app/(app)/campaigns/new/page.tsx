@@ -1,34 +1,40 @@
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { getOrgSettings } from "@/server/settings";
 import { NewCampaignForm } from "@/components/NewCampaignForm";
-import { Panel } from "@/components/ui";
 
 export default async function NewCampaignPage() {
   const user = await requireUser();
-  const products = await prisma.product.findMany({
-    where: { organizationId: user.organizationId, status: "active" },
-    orderBy: { name: "asc" },
-  });
-  const reps =
+  const [products, settings, reps] = await Promise.all([
+    prisma.product.findMany({
+      where: { organizationId: user.organizationId, status: "active" },
+      orderBy: { name: "asc" },
+    }),
+    getOrgSettings(),
     user.role === "lead"
-      ? await prisma.user.findMany({
+      ? prisma.user.findMany({
           where: { organizationId: user.organizationId, status: { not: "deactivated" } },
           orderBy: { fullName: "asc" },
           select: { id: true, fullName: true },
         })
-      : [];
+      : Promise.resolve([] as { id: string; fullName: string }[]),
+  ]);
 
   return (
-    <div>
-      <h1 className="text-[28px] tracking-tight mb-1.5">New campaign</h1>
-      <p className="text-muted mb-6">Flow drafts the playbook from your product description — goes live immediately, edit anything after.</p>
-      <Panel>
-        <NewCampaignForm
-          products={products.map((p) => ({ id: p.id, name: p.name, type: p.type, summary: p.summary }))}
-          reps={reps}
-          isLead={user.role === "lead"}
-        />
-      </Panel>
+    <div className="animate-fade-up max-w-cockpit">
+      <div className="mb-8">
+        <h1 className="page-title m-0 mb-1">New campaign</h1>
+        <p className="text-muted text-sm m-0">
+          One form. Optionally let {settings.assistantName} research the market, then leads start coming in — straight
+          to Focus.
+        </p>
+      </div>
+      <NewCampaignForm
+        products={products.map((p) => ({ id: p.id, name: p.name, type: p.type, summary: p.summary }))}
+        reps={reps}
+        isLead={user.role === "lead"}
+        assistantName={settings.assistantName}
+      />
     </div>
   );
 }

@@ -54,9 +54,8 @@ export function LeadGenRunner({ campaignId }: { campaignId: string }) {
     <Panel>
       <h2 className="text-[17px] font-medium mb-3">Run lead generation</h2>
       <p className="text-sm text-muted mb-3">
-        Searches Google for real businesses matching this campaign&apos;s ICP and search queries, checks each
-        website, scores fit, and drops new ones straight into the Lead Inbox for you to approve or reject —
-        nothing here queues a lead automatically.
+        Searches Google for real businesses matching this campaign&apos;s search queries, checks each website, scores
+        fit, and puts new leads in your Focus queue — nothing is sent to prospects.
       </p>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <label className="text-sm">
@@ -109,7 +108,7 @@ export function LeadGenRunner({ campaignId }: { campaignId: string }) {
             <>
               <p className="font-medium mb-1">{result.narration}</p>
               <p className="text-muted">
-                Found {result.found} · New in inbox {result.new} · Duplicates {result.duplicates} · Rejected {result.rejectedAuto} · Actual
+                Found {result.found} · New in Focus {result.new} · Duplicates {result.duplicates} · Rejected {result.rejectedAuto} · Actual
                 cost ${Number(result.costUsd).toFixed(3)}
               </p>
             </>

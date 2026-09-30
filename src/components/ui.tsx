@@ -7,7 +7,7 @@ function cx(...parts: Array<string | false | undefined>) {
 export function Panel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cx("bg-panel border border-rule rounded-card p-5", className)}
+      className={cx("bg-panel border border-rule rounded-card p-5 shadow-soft", className)}
       {...props}
     />
   );
@@ -22,17 +22,24 @@ export function Btn({
   children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "primary" | "go" | "stop" | "ghost";
-  size?: "sm" | "md";
+  variant?: "default" | "primary" | "go" | "stop" | "ghost" | "urgent";
+  size?: "sm" | "md" | "lg";
   loading?: boolean;
 }) {
-  const base = "border rounded-lg font-medium disabled:opacity-55 disabled:cursor-default transition-colors inline-flex items-center justify-center gap-1.5";
-  const sizes = size === "sm" ? "px-2.5 py-1.5 text-[13px]" : "px-3.5 py-2 text-sm";
+  const base =
+    "border rounded-xl font-medium disabled:opacity-55 disabled:cursor-default transition-colors inline-flex items-center justify-center gap-1.5";
+  const sizes =
+    size === "lg"
+      ? "px-5 py-3 text-[15px]"
+      : size === "sm"
+        ? "px-2.5 py-1.5 text-[13px]"
+        : "px-3.5 py-2 text-sm";
   const variants: Record<string, string> = {
     default: "bg-panel border-rule text-ink hover:border-accent",
     primary: "bg-accent border-accent text-on-accent font-semibold hover:bg-accent-hover hover:border-accent-hover",
-    go: "bg-go-soft border-go text-go font-semibold hover:brightness-95",
+    go: "bg-go-soft border-go/40 text-go font-semibold hover:brightness-95",
     stop: "bg-panel border-rule text-stop hover:border-stop",
+    urgent: "bg-stop-soft border-stop/50 text-stop font-semibold hover:border-stop",
     ghost: "bg-transparent border-transparent text-muted hover:bg-panel2 hover:text-ink",
   };
   return (
@@ -54,15 +61,17 @@ export function Chip({
   className,
 }: {
   children: ReactNode;
-  tone?: "default" | "hot" | "go" | "stop" | "acc";
+  tone?: "default" | "hot" | "go" | "stop" | "acc" | "warm" | "cold";
   className?: string;
 }) {
   const tones: Record<string, string> = {
-    default: "bg-bg text-muted",
-    hot: "bg-signal-soft text-signal font-semibold",
+    default: "bg-panel2 text-muted",
+    hot: "bg-accent-soft text-accent font-semibold",
     go: "bg-go-soft text-go",
     stop: "bg-stop-soft text-stop",
     acc: "bg-accent-soft text-accent",
+    warm: "bg-warm-soft text-warm",
+    cold: "bg-cold-soft text-cold",
   };
   return (
     <span className={cx("inline-block text-xs px-2.5 py-0.5 rounded-full mr-1.5 mb-1.5", tones[tone], className)}>
@@ -71,38 +80,45 @@ export function Chip({
   );
 }
 
-export function Bar({ pct, tone = "accent" }: { pct: number; tone?: "accent" | "go" }) {
+export function Bar({ pct, tone = "accent" }: { pct: number; tone?: "accent" | "go" | "warm" }) {
   const clamped = Math.max(0, Math.min(100, pct));
+  const color = tone === "go" ? "bg-go" : tone === "warm" ? "bg-warm" : "bg-accent";
   return (
     <div className="h-2 bg-panel2 rounded-full overflow-hidden my-1.5">
-      <div
-        className={cx("h-full rounded-full", tone === "go" ? "bg-go" : "bg-accent")}
-        style={{ width: `${clamped}%` }}
-      />
+      <div className={cx("h-full rounded-full transition-[width] duration-500", color)} style={{ width: `${clamped}%` }} />
     </div>
   );
 }
 
-export function Badge({ children }: { children: ReactNode }) {
-  return (
-    <span className="text-xs bg-accent text-on-accent rounded-full px-2 py-0.5 font-semibold">{children}</span>
-  );
+export function Badge({ children, tone = "accent" }: { children: ReactNode; tone?: "accent" | "stop" | "warm" }) {
+  const tones = {
+    accent: "bg-accent text-on-accent",
+    stop: "bg-stop text-on-accent",
+    warm: "bg-warm text-on-accent",
+  };
+  return <span className={cx("text-xs rounded-full px-2 py-0.5 font-semibold", tones[tone])}>{children}</span>;
+}
+
+export function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return <p className={cx("section-label m-0 mb-3", className)}>{children}</p>;
 }
 
 export function VoiceLine({ name, children, thinking }: { name: string; children: ReactNode; thinking?: boolean }) {
   return (
-    <div className="flex gap-3.5 items-start mb-7">
+    <div className="flex gap-4 items-start">
       <div
         className={cx(
-          "flex-none w-10 h-10 rounded-xl bg-ink border border-rule flex items-center justify-center text-accent font-bold",
+          "flex-none w-11 h-11 rounded-xl bg-[#050807] border border-accent/25 flex items-center justify-center overflow-hidden",
           thinking && "orb-think",
         )}
+        aria-hidden
       >
-        F
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/logo-mark.png" alt="" className="h-6 w-auto" />
       </div>
-      <div>
-        <span className="text-xs text-signal font-semibold block mb-0.5">{name}</span>
-        <p className="text-lg leading-relaxed max-w-[68ch] whitespace-pre-line m-0">{children}</p>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <span className="text-[11px] text-accent font-semibold tracking-wide uppercase block mb-1.5">{name}</span>
+        <div className="next-action whitespace-pre-line">{children}</div>
       </div>
     </div>
   );
@@ -136,31 +152,31 @@ export function Tabs({
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="p-7 text-center text-muted">{children}</div>;
+  return <div className="p-10 text-center text-muted text-sm">{children}</div>;
 }
 
-const RING_COLORS = ["#34E0A1", "#5B9CF6", "#F06AAE", "#F0B429"];
-
+/** One meaning per color: progress uses accent only (hot = on track). */
 export function Ring({
   value,
   target,
   label,
-  colorIndex = 0,
-  size = 84,
+  hint,
+  size = 88,
 }: {
   value: number;
   target: number;
   label: string;
-  colorIndex?: number;
+  hint?: string;
   size?: number;
 }) {
   const pct = target > 0 ? Math.min(1, value / target) : 0;
-  const stroke = 6;
+  const stroke = 5;
   const r = size / 2 - stroke;
   const circumference = 2 * Math.PI * r;
-  const color = RING_COLORS[colorIndex % RING_COLORS.length];
+  const done = target > 0 && value >= target;
+  const color = done ? "var(--accent)" : value === 0 ? "var(--cold)" : "var(--accent)";
   return (
-    <div className="flex flex-col items-center gap-1.5">
+    <div className="flex flex-col items-center gap-2 max-w-[7.5rem] text-center">
       <div className="relative" style={{ width: size, height: size }}>
         <svg width={size} height={size} className="-rotate-90">
           <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--panel2)" strokeWidth={stroke} fill="none" />
@@ -177,11 +193,12 @@ export function Ring({
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-lg font-bold">{value}</span>
-          <span className="text-[10px] text-muted">/{target}</span>
+          <span className="text-xl font-bold tracking-tight">{value}</span>
+          <span className="text-[10px] text-dim">of {target}</span>
         </div>
       </div>
-      <span className="text-xs text-muted">{label}</span>
+      <span className="text-xs font-medium text-ink leading-snug">{label}</span>
+      {hint && <span className="text-[10px] text-dim leading-snug">{hint}</span>}
     </div>
   );
 }

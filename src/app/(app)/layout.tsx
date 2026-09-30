@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { getOrgSettings } from "@/server/settings";
-import { AppShell } from "@/components/AppShell";
+import { AppShell, type NavItem } from "@/components/AppShell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -12,7 +12,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/profile?setup=1");
   }
 
-  const [dueNowCount, openReplies, runsInProgress, awaitingReview, settings, latestStat] = await Promise.all([
+  const [dueNowCount, openReplies, oldestOpenReply, settings, latestStat] = await Promise.all([
     prisma.lead.count({
       where: {
         ownerId: user.id,
@@ -21,22 +21,39 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       },
     }),
     prisma.reply.count({ where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } } }),
-    prisma.leadSourceRun.count({ where: { organizationId: user.organizationId, status: "running" } }),
-    prisma.lead.count({ where: { organizationId: user.organizationId, status: "inbox" } }),
+    prisma.reply.findFirst({
+      where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } },
+      orderBy: { receivedAt: "asc" },
+      select: { receivedAt: true },
+    }),
     getOrgSettings(),
     prisma.dailyStat.findFirst({ where: { userId: user.id, closedOutAt: { not: null } }, orderBy: { date: "desc" } }),
   ]);
 
-  const navItems = [
-    { href: "/today", label: "Today" },
-    { href: "/focus", label: "Focus", badge: dueNowCount },
-    { href: "/replies", label: "Replies", badge: openReplies },
-    { href: "/campaigns", label: "Campaigns" },
-    { href: "/leads", label: "Lead Inbox", badge: awaitingReview },
-    { href: "/lead-generation", label: "Lead Gen", badge: runsInProgress },
-    { href: "/deals", label: "Deals" },
-    { href: "/whats-working", label: "What's Working" },
-    ...(user.role === "lead" ? [{ href: "/team", label: "Team" }, { href: "/settings", label: "Settings" }] : []),
+  const replyAgeHours = oldestOpenReply
+    ? (Date.now() - new Date(oldestOpenReply.receivedAt).getTime()) / (1000 * 60 * 60)
+    : 0;
+  const repliesUrgent = openReplies > 0 && replyAgeHours >= 24;
+
+  const navItems: NavItem[] = [
+    { href: "/today", label: "Today", group: "work" },
+    { href: "/focus", label: "Focus", badge: dueNowCount, group: "work" },
+    {
+      href: "/replies",
+      label: "Replies",
+      badge: openReplies,
+      badgeTone: repliesUrgent ? "stop" : openReplies > 0 ? "warm" : "accent",
+      group: "work",
+    },
+    { href: "/campaigns", label: "Campaigns", group: "pipeline" },
+    { href: "/deals", label: "Deals", group: "pipeline" },
+    { href: "/whats-working", label: "What's Working", group: "pipeline" },
+    ...(user.role === "lead"
+      ? ([
+          { href: "/team", label: "Team", group: "admin" },
+          { href: "/settings", label: "Settings", group: "admin" },
+        ] as NavItem[])
+      : []),
   ];
 
   return (

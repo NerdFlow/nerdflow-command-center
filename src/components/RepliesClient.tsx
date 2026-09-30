@@ -85,114 +85,152 @@ export function RepliesClient({ overview }: { overview: Overview }) {
   }
 
   const { gmail, instagram, linkedin } = overview.channelAccounts;
+  const oldestHours =
+    openReplies.length > 0
+      ? (Date.now() - new Date(openReplies[0]!.receivedAt).getTime()) / (1000 * 60 * 60)
+      : 0;
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-[22px] tracking-tight mb-4">Replies</h1>
+    <div className="max-w-cockpit animate-fade-up">
+      <div className="mb-8">
+        <h1 className="page-title m-0 mb-1">Replies</h1>
+        <p className="text-muted text-sm m-0">People waiting on you — answer the oldest first.</p>
+      </div>
 
-      <Panel className="mb-6">
-        <div className="flex flex-wrap gap-6 mb-3">
-          <div>
-            <p className="text-2xl font-bold m-0">{overview.summary.messagedThisWeek}</p>
-            <p className="text-xs text-muted m-0">Messaged this week</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold m-0">{overview.summary.repliedThisWeek}</p>
-            <p className="text-xs text-muted m-0">Replied</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold m-0">{openReplies.length}</p>
-            <p className="text-xs text-muted m-0">Waiting</p>
-          </div>
+      <div className="flex flex-wrap gap-8 mb-8">
+        <div>
+          <p className="stat-number m-0">{openReplies.length}</p>
+          <p className="text-xs text-dim m-0 mt-1">Need your reply</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {gmail && (
-            <a href={channelLink("gmail", gmail)} target="_blank" rel="noreferrer">
-              <Btn size="sm" variant="ghost">Open Gmail</Btn>
-            </a>
-          )}
-          {instagram && (
-            <a href={channelLink("instagram", instagram)} target="_blank" rel="noreferrer">
-              <Btn size="sm" variant="ghost">Open Instagram</Btn>
-            </a>
-          )}
-          {linkedin && (
-            <a href={channelLink("linkedin", linkedin)} target="_blank" rel="noreferrer">
-              <Btn size="sm" variant="ghost">Open LinkedIn</Btn>
-            </a>
-          )}
-          {!gmail && !instagram && !linkedin && (
-            <p className="text-xs text-muted m-0">Add your channel accounts in Profile to get quick-open links here.</p>
-          )}
+        <div>
+          <p className="stat-number m-0">{overview.summary.repliedThisWeek}</p>
+          <p className="text-xs text-dim m-0 mt-1">Replied this week</p>
         </div>
-      </Panel>
+        <div>
+          <p className="stat-number m-0">{overview.summary.messagedThisWeek}</p>
+          <p className="text-xs text-dim m-0 mt-1">You messaged</p>
+        </div>
+      </div>
 
-      <div className="flex justify-between items-center mb-2">
-        <h2 className="text-[17px] font-medium m-0">Waiting on you ({openReplies.length})</h2>
-        <Btn size="sm" onClick={() => { setPrefillLead(null); setLogOpen(true); }}>
+      <div className="flex flex-wrap gap-2 mb-8">
+        {gmail && (
+          <a href={channelLink("gmail", gmail)} target="_blank" rel="noreferrer">
+            <Btn size="sm" variant="ghost">
+              Open Gmail
+            </Btn>
+          </a>
+        )}
+        {instagram && (
+          <a href={channelLink("instagram", instagram)} target="_blank" rel="noreferrer">
+            <Btn size="sm" variant="ghost">
+              Open Instagram
+            </Btn>
+          </a>
+        )}
+        {linkedin && (
+          <a href={channelLink("linkedin", linkedin)} target="_blank" rel="noreferrer">
+            <Btn size="sm" variant="ghost">
+              Open LinkedIn
+            </Btn>
+          </a>
+        )}
+        {!gmail && !instagram && !linkedin && (
+          <p className="text-xs text-dim m-0">Add your inboxes in Profile for quick-open links.</p>
+        )}
+      </div>
+
+      <div className="flex justify-between items-center mb-3">
+        <h2 className="text-base font-semibold m-0">
+          Waiting on you
+          {openReplies.length > 0 && oldestHours >= 24 && (
+            <span className="ml-2 text-stop font-medium text-sm">· oldest is {Math.floor(oldestHours / 24)}d late</span>
+          )}
+        </h2>
+        <Btn
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setPrefillLead(null);
+            setLogOpen(true);
+          }}
+        >
           + Log a reply
         </Btn>
       </div>
 
       {openReplies.length === 0 && (
-        <Panel className="mb-6">
-          <p className="text-sm text-muted m-0">Nobody&apos;s waiting on you.</p>
-        </Panel>
+        <p className="text-sm text-muted mb-8 py-6 border border-dashed border-rule rounded-card text-center">Nobody&apos;s waiting on you. Nice.</p>
       )}
 
-      <div className="space-y-2 mb-6">
-        {openReplies.map((r) => (
-          <div key={r.id}>
-            <button
-              onClick={() => setExpandedId((cur) => (cur === r.id ? null : r.id))}
-              className={"block w-full text-left px-4 py-3 rounded-card border " + (expandedId === r.id ? "border-accent bg-panel2" : "border-rule bg-panel hover:border-accent")}
-            >
-              <div className="flex justify-between items-baseline gap-2">
-                <span className="font-medium text-sm">{r.businessName}</span>
-                <span className="text-xs text-muted shrink-0">{timeAgo(r.receivedAt)}</span>
-              </div>
-              <div className="flex items-center gap-1.5 mt-0.5 mb-1">
-                <span className="text-xs text-muted">{CHANNEL_LABEL[r.channel]}</span>
-                {r.label && <Chip tone={LABEL_TONE[r.label]}>{LABEL_TEXT[r.label]}</Chip>}
-              </div>
-              <p className="text-xs text-muted m-0 truncate">{r.text}</p>
-            </button>
+      <div className="space-y-2 mb-10">
+        {openReplies.map((r) => {
+          const ageH = (Date.now() - new Date(r.receivedAt).getTime()) / (1000 * 60 * 60);
+          const late = ageH >= 24;
+          const isOpen = expandedId === r.id;
+          return (
+            <div key={r.id}>
+              <button
+                type="button"
+                onClick={() => setExpandedId((cur) => (cur === r.id ? null : r.id))}
+                className={
+                  "block w-full text-left px-4 py-3.5 rounded-card border transition-colors " +
+                  (isOpen
+                    ? "border-accent bg-panel"
+                    : late
+                      ? "border-stop/35 bg-stop-soft/40 hover:border-stop/50"
+                      : "border-rule bg-panel hover:border-accent/40")
+                }
+              >
+                <div className="flex justify-between items-baseline gap-2">
+                  <span className="font-semibold text-sm">{r.businessName}</span>
+                  <span className={"text-xs shrink-0 font-medium " + (late ? "text-stop" : "text-dim")}>
+                    {late ? `${Math.floor(ageH / 24)}d waiting` : timeAgo(r.receivedAt)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-1 mb-1">
+                  <span className="text-xs text-dim">{CHANNEL_LABEL[r.channel]}</span>
+                  {r.label && <Chip tone={LABEL_TONE[r.label]}>{LABEL_TEXT[r.label]}</Chip>}
+                </div>
+                {!isOpen && <p className="text-xs text-muted m-0 truncate">{r.text}</p>}
+              </button>
 
-            {expandedId === r.id && (
-              <div className="mt-2 space-y-4">
-                {loadingDetail && (
-                  <Panel>
-                    <p className="text-muted m-0">Loading…</p>
-                  </Panel>
-                )}
-                {!loadingDetail && detail && (
-                  <>
-                    <ReplyDetailPanel detail={detail} />
-                    <DraftPanel key={r.id} replyId={r.id} initialLabel={detail.reply.label} initialDraft={detail.reply.responseDraft} onHandled={() => removeFromWaitingOnYou(r.id)} />
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+              {isOpen && (
+                <div className="mt-2 space-y-3 animate-fade-up">
+                  {loadingDetail && <p className="text-muted text-sm px-1">Loading…</p>}
+                  {!loadingDetail && detail && (
+                    <>
+                      <ReplyDetailPanel detail={detail} compact />
+                      <DraftPanel
+                        key={r.id}
+                        replyId={r.id}
+                        initialLabel={detail.reply.label}
+                        initialDraft={detail.reply.responseDraft}
+                        gmail={gmail}
+                        onHandled={() => removeFromWaitingOnYou(r.id)}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      <h2 className="text-[17px] font-medium mb-2">Did they reply? ({waiting.length})</h2>
+      <h2 className="text-base font-semibold mb-3">Did they reply? ({waiting.length})</h2>
       {waiting.length === 0 ? (
-        <Panel>
-          <p className="text-sm text-muted m-0">Nothing sent recently that&apos;s still waiting on a response.</p>
-        </Panel>
+        <p className="text-sm text-muted">Nothing recent still waiting on a response.</p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {waiting.map((w) => (
-            <Panel key={w.touchId} className="flex justify-between items-center py-2.5">
+            <div key={w.touchId} className="flex justify-between items-center gap-3 px-4 py-3 rounded-card border border-rule bg-panel">
               <div>
                 <p className="text-sm font-medium m-0">{w.businessName}</p>
-                <p className="text-xs text-muted m-0">
+                <p className="text-xs text-dim m-0">
                   {CHANNEL_LABEL[w.channel]} · sent {timeAgo(w.occurredAt)}
                 </p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 shrink-0">
                 <Btn
                   size="sm"
                   variant="go"
@@ -207,63 +245,43 @@ export function RepliesClient({ overview }: { overview: Overview }) {
                   Not yet
                 </Btn>
               </div>
-            </Panel>
+            </div>
           ))}
         </div>
       )}
 
-      {logOpen && (
-        <LogReplyModal
-          prefillLead={prefillLead}
-          onClose={() => setLogOpen(false)}
-          onLogged={() => router.refresh()}
-        />
-      )}
+      {logOpen && <LogReplyModal prefillLead={prefillLead} onClose={() => setLogOpen(false)} onLogged={() => router.refresh()} />}
     </div>
   );
 }
 
-function ReplyDetailPanel({ detail }: { detail: ReplyDetail }) {
+function ReplyDetailPanel({ detail, compact }: { detail: ReplyDetail; compact?: boolean }) {
   return (
-    <div className="space-y-3">
-      <Panel>
-        <div className="flex justify-between items-start mb-2">
-          <div>
-            <h3 className="text-[15px] font-medium m-0">{detail.lead.businessName}</h3>
-            <p className="text-sm text-muted m-0">{detail.lead.contactName ?? "Contact unknown"}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-muted m-0">{CHANNEL_LABEL[detail.reply.channel]}</p>
-            {detail.reply.label && <Chip tone={LABEL_TONE[detail.reply.label]}>{LABEL_TEXT[detail.reply.label]}</Chip>}
-          </div>
-        </div>
-
-        <p className="text-xs text-muted uppercase tracking-wide mb-1">Their reply</p>
-        <p className="text-sm whitespace-pre-wrap bg-panel2 rounded-lg p-3 mb-1">{detail.reply.text}</p>
-
-        <div className="flex justify-between text-xs text-muted mt-2">
-          <span>
-            {detail.lead.email && `✉ ${detail.lead.email}`} {detail.lead.phone && `· ☎ ${detail.lead.phone}`}
-          </span>
-          <span>{timeAgo(detail.reply.receivedAt as unknown as string)}</span>
-        </div>
-
-        {detail.history.length > 0 && (
-          <details className="mt-3">
-            <summary className="text-xs text-accent cursor-pointer">History ({detail.history.length})</summary>
-            <ul className="list-none m-0 p-0 mt-2 space-y-1">
-              {detail.history.map((h, i) => (
-                <li key={i} className="text-xs flex justify-between">
-                  <span>
-                    {CHANNEL_LABEL[h.channel]} · {h.label === "sent" ? "Sent" : h.label === "replied" ? "Replied" : h.label.replace("_", " ")}
-                  </span>
-                  <span className="text-muted">{timeAgo(h.at)}</span>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </Panel>
+    <div className={"rounded-card border border-rule bg-panel px-4 py-3 " + (compact ? "" : "")}>
+      <p className="section-label mb-2">They wrote</p>
+      <p className="text-sm whitespace-pre-wrap m-0 leading-relaxed">{detail.reply.text}</p>
+      <div className="flex justify-between text-xs text-dim mt-3">
+        <span>
+          {detail.lead.contactName ?? "Unknown"}
+          {detail.lead.email ? ` · ${detail.lead.email}` : ""}
+        </span>
+        <span>{timeAgo(detail.reply.receivedAt as unknown as string)}</span>
+      </div>
+      {detail.history.length > 0 && (
+        <details className="mt-3">
+          <summary className="text-xs text-accent cursor-pointer">Earlier ({detail.history.length})</summary>
+          <ul className="list-none m-0 p-0 mt-2 space-y-1">
+            {detail.history.map((h, i) => (
+              <li key={i} className="text-xs flex justify-between gap-2">
+                <span>
+                  {CHANNEL_LABEL[h.channel]} · {h.label === "sent" ? "Sent" : h.label === "replied" ? "Replied" : h.label.replace("_", " ")}
+                </span>
+                <span className="text-dim shrink-0">{timeAgo(h.at)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
@@ -272,11 +290,13 @@ function DraftPanel({
   replyId,
   initialLabel,
   initialDraft,
+  gmail,
   onHandled,
 }: {
   replyId: string;
   initialLabel: ReplyLabel | null;
   initialDraft: string | null;
+  gmail?: string | null;
   onHandled: () => void;
 }) {
   const toast = useToast();
@@ -352,111 +372,136 @@ function DraftPanel({
 
   if (label === "unsubscribe") {
     return (
-      <Panel>
-        <p className="text-sm mb-3">This reply asked to stop being contacted.</p>
+      <div className="rounded-card border border-stop/30 bg-stop-soft px-4 py-4">
+        <p className="text-sm mb-3 m-0">They asked to stop being contacted.</p>
         {error && <p className="text-sm text-stop mb-2">{error}</p>}
         <Btn variant="stop" loading={busy === "unsub"} onClick={() => run("unsub", () => applyUnsubscribe(replyId), "Marked do-not-contact.")}>
           {busy === "unsub" ? "Applying…" : "Set do-not-contact"}
         </Btn>
-      </Panel>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <Panel>
-        <p className="text-sm font-medium mb-2">Here&apos;s what I&apos;d send</p>
-        {classifying ? (
-          <p className="text-sm text-muted">Reading the reply…</p>
-        ) : draft ? (
-          <>
-            <textarea
-              className="w-full border border-rule rounded-lg px-3 py-2 bg-bg text-sm min-h-[140px] mb-2"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <Btn size="sm" onClick={copy}>
-                {copied ? "Copied!" : "Copy"}
-              </Btn>
-              <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("shorter")}>
-                {rewriting === "shorter" ? "…" : "Shorter"}
-              </Btn>
-              <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("casual")}>
-                {rewriting === "casual" ? "…" : "Casual"}
-              </Btn>
-              <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("new_angle")}>
-                {rewriting === "new_angle" ? "…" : "New angle"}
-              </Btn>
-            </div>
-          </>
-        ) : (
-          <Btn size="sm" disabled={classifying} onClick={classify}>
-            Draft a response with Flow
-          </Btn>
-        )}
-      </Panel>
+    <div className="rounded-card border border-accent/30 bg-accent-soft/30 px-4 py-4 space-y-4">
+      <div>
+        <p className="section-label mb-1 text-accent">Your next step</p>
+        <p className="text-sm font-medium m-0">Copy → send in your inbox → mark sent</p>
+      </div>
 
-      {error && <p className="text-sm text-stop">{error}</p>}
-
-      <Panel>
-        <p className="text-xs text-muted uppercase tracking-wide mb-2">Actions</p>
-        <div className="flex flex-wrap gap-2">
-          <Btn variant="go" disabled={busy !== null && busy !== "sent"} loading={busy === "sent"} onClick={() => run("sent", () => markReplySent(replyId), "Marked as sent.")}>
-            {busy === "sent" ? "Marking…" : "Mark as sent"}
-          </Btn>
-          <Btn variant="ghost" disabled={busy !== null} onClick={() => setShowMeeting((s) => !s)}>
-            Book meeting
-          </Btn>
-          <Btn variant="ghost" disabled={busy !== null && busy !== "snooze"} loading={busy === "snooze"} onClick={() => run("snooze", () => snoozeReply(replyId), "Snoozed.")}>
-            {busy === "snooze" ? "Snoozing…" : "Snooze"}
-          </Btn>
-          <Btn variant="stop" disabled={busy !== null} onClick={() => setShowClose((s) => !s)}>
-            Close lead
-          </Btn>
-        </div>
-
-        {showMeeting && (
-          <div className="border border-rule rounded-lg p-2.5 space-y-2 mt-3">
-            <input
-              type="datetime-local"
-              className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
-              value={meetingAt}
-              onChange={(e) => setMeetingAt(e.target.value)}
-            />
-            <input
-              className="w-full border border-rule rounded px-2 py-1.5 bg-bg text-sm"
-              placeholder="Note (optional)"
-              value={meetingNote}
-              onChange={(e) => setMeetingNote(e.target.value)}
-            />
+      {classifying ? (
+        <p className="text-sm text-muted m-0">Reading their reply…</p>
+      ) : draft ? (
+        <>
+          <textarea
+            className="w-full border border-rule rounded-xl px-3 py-3 bg-panel text-base leading-relaxed min-h-[140px] focus:outline-none focus:border-accent/40"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Btn variant="primary" size="lg" onClick={copy}>
+              {copied ? "Copied!" : "1. Copy reply"}
+            </Btn>
+            {gmail && (
+              <a href={channelLink("gmail", gmail)} target="_blank" rel="noreferrer">
+                <Btn size="lg" variant="default">
+                  2. Open Gmail
+                </Btn>
+              </a>
+            )}
             <Btn
-              size="sm"
-              variant="primary"
-              disabled={!meetingAt}
-              loading={busy === "meeting"}
-              onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote), "Meeting booked.")}
+              size="lg"
+              variant="go"
+              disabled={busy !== null && busy !== "sent"}
+              loading={busy === "sent"}
+              onClick={() => run("sent", () => markReplySent(replyId), "Marked as sent.")}
             >
-              {busy === "meeting" ? "Booking…" : "Confirm meeting"}
+              {busy === "sent" ? "Marking…" : "3. Mark as sent"}
             </Btn>
           </div>
-        )}
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("shorter")}>
+              {rewriting === "shorter" ? "…" : "Shorter"}
+            </Btn>
+            <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("casual")}>
+              {rewriting === "casual" ? "…" : "Casual"}
+            </Btn>
+            <Btn size="sm" variant="ghost" disabled={rewriting !== null} onClick={() => rewrite("new_angle")}>
+              {rewriting === "new_angle" ? "…" : "New angle"}
+            </Btn>
+          </div>
+        </>
+      ) : (
+        <Btn size="sm" disabled={classifying} onClick={classify}>
+          Draft a response with Flow
+        </Btn>
+      )}
 
-        {showClose && (
-          <div className="border border-rule rounded-lg p-2.5 space-y-1.5 mt-3">
+      {error && <p className="text-sm text-stop m-0">{error}</p>}
+
+      <div className="border-t border-rule/60 pt-3 flex flex-wrap gap-2">
+        <Btn variant="ghost" size="sm" disabled={busy !== null} onClick={() => setShowMeeting((s) => !s)}>
+          Book meeting
+        </Btn>
+        <Btn
+          variant="ghost"
+          size="sm"
+          disabled={busy !== null && busy !== "snooze"}
+          loading={busy === "snooze"}
+          onClick={() => run("snooze", () => snoozeReply(replyId), "Snoozed.")}
+        >
+          {busy === "snooze" ? "Snoozing…" : "Snooze"}
+        </Btn>
+        <Btn variant="ghost" size="sm" disabled={busy !== null} onClick={() => setShowClose((s) => !s)} className="text-stop">
+          Close lead
+        </Btn>
+      </div>
+
+      {showMeeting && (
+        <div className="border border-rule rounded-xl p-3 space-y-2">
+          <input
+            type="datetime-local"
+            className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg text-sm"
+            value={meetingAt}
+            onChange={(e) => setMeetingAt(e.target.value)}
+          />
+          <input
+            className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg text-sm"
+            placeholder="Note (optional)"
+            value={meetingNote}
+            onChange={(e) => setMeetingNote(e.target.value)}
+          />
+          <Btn
+            size="sm"
+            variant="primary"
+            disabled={!meetingAt}
+            loading={busy === "meeting"}
+            onClick={() => run("meeting", () => bookMeetingFromReply(replyId, new Date(meetingAt).toISOString(), meetingNote), "Meeting booked.")}
+          >
+            {busy === "meeting" ? "Booking…" : "Confirm meeting"}
+          </Btn>
+        </div>
+      )}
+
+      {showClose && (
+        <div className="border border-rule rounded-xl p-3 space-y-2">
+          <p className="text-xs text-muted m-0">Why close this lead?</p>
+          <div className="flex flex-wrap gap-2">
             {CLOSE_REASONS.map((r) => (
-              <button
+              <Btn
                 key={r.value}
+                size="sm"
+                variant="stop"
                 disabled={busy !== null}
-                className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-panel2 disabled:opacity-40"
-                onClick={() => run("close", () => closeLeadFromReply(replyId, r.value), "Lead closed.")}
+                loading={busy === r.value}
+                onClick={() => run(r.value, () => closeLeadFromReply(replyId, r.value), "Lead closed.")}
               >
-                {busy === "close" ? "Closing…" : r.label}
-              </button>
+                {r.label}
+              </Btn>
             ))}
           </div>
-        )}
-      </Panel>
+        </div>
+      )}
     </div>
   );
 }

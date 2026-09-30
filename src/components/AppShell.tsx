@@ -3,11 +3,37 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { FlowPanel } from "@/components/FlowPanel";
+import { BrandMark, BrandWordmark } from "@/components/BrandLogo";
 
-type NavItem = { href: string; label: string; badge?: number };
+export type NavItem = {
+  href: string;
+  label: string;
+  badge?: number;
+  badgeTone?: "accent" | "stop" | "warm";
+  group: "work" | "pipeline" | "admin";
+};
+
+const GROUP_LABEL: Record<NavItem["group"], string> = {
+  work: "Your day",
+  pipeline: "Pipeline",
+  admin: "Team",
+};
+
+function roleLabel(role: string) {
+  if (role === "admin") return "Admin";
+  if (role === "manager" || role === "lead") return "Manager";
+  return "Rep";
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0]!.slice(0, 1).toUpperCase();
+  return (parts[0]!.slice(0, 1) + parts[parts.length - 1]!.slice(0, 1)).toUpperCase();
+}
 
 export function AppShell({
   user,
@@ -24,82 +50,141 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const isFocusMode = pathname.startsWith("/focus");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   if (isFocusMode) {
-    // Full width, no sidebar, no Flow panel — distraction-free per the Focus mode spec.
     return (
-      <div className="min-h-screen">
-        <div className="flex items-center justify-between px-4 md:px-8 py-3 border-b border-rule">
-          <div className="font-semibold tracking-tight">NerdFlow · Focus</div>
-          <Link href="/today" className="text-sm text-muted hover:text-ink">
+      <div className="min-h-screen app-atmosphere flex flex-col">
+        <div className="flex items-center justify-between px-4 md:px-8 py-3 border-b border-rule bg-panel/80 backdrop-blur-sm">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <BrandMark className="h-5 w-auto shrink-0" size={20} />
+            <span className="text-sm text-dim truncate">
+              <span className="text-ink font-medium">Focus</span>
+            </span>
+          </div>
+          <Link href="/today" className="text-sm text-muted hover:text-ink transition-colors">
             Exit Focus
           </Link>
         </div>
-        <main className="w-full">{children}</main>
+        <main className="w-full flex-1 flex flex-col min-h-0">{children}</main>
       </div>
     );
   }
 
+  const groups: NavItem["group"][] = ["work", "pipeline", "admin"];
+  const grouped = groups
+    .map((g) => ({ group: g, items: navItems.filter((i) => i.group === g) }))
+    .filter((g) => g.items.length > 0);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] min-h-screen">
-      <nav className="border-b md:border-b-0 md:border-r border-rule p-3.5 md:p-5 flex md:flex-col gap-1 bg-panel overflow-x-auto md:overflow-visible sticky top-0 md:relative z-10">
-        <div className="hidden md:block px-2.5 pb-5">
-          <div className="font-semibold tracking-tight">NerdFlow</div>
-          <div className="text-xs text-muted mt-1">Sales Command Center</div>
-        </div>
-        {navItems.map((item) => {
-          const on = pathname === item.href || (item.href !== "/today" && pathname.startsWith(item.href));
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={
-                "flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-sm whitespace-nowrap " +
-                (on ? "bg-accent-soft text-ink font-semibold shadow-[inset_3px_0_0_var(--accent)]" : "text-muted hover:bg-bg hover:text-ink")
-              }
-            >
-              {item.label}
-              {!!item.badge && (
-                <span className="text-[11px] bg-accent text-on-accent rounded-full px-2 font-semibold">
-                  {item.badge}
-                </span>
-              )}
+    <div className="grid grid-cols-1 md:grid-cols-[232px_1fr] min-h-screen app-atmosphere">
+      <nav className="border-b md:border-b-0 md:border-r border-rule bg-panel/90 backdrop-blur-sm md:bg-panel sticky top-0 z-20 md:h-screen md:flex md:flex-col">
+        <div className="flex md:flex-col gap-1 p-3 md:p-4 overflow-x-auto md:overflow-y-auto md:flex-1">
+          <div className="hidden md:block px-1 pb-5 pt-1">
+            <Link href="/today" className="inline-flex">
+              <BrandWordmark className="h-7 w-auto max-w-[168px]" />
             </Link>
-          );
-        })}
-        <div className="hidden md:flex items-center gap-1.5 mt-auto pt-3.5 border-t border-rule text-sm">
-          <span>🔥</span>
-          <span className="font-medium">{streak}</span>
-          <span className="text-muted text-xs">day streak</span>
+            <div className="text-[10px] text-dim mt-2 px-0.5 tracking-wide uppercase">Sales cockpit</div>
+          </div>
+          <div className="md:hidden flex items-center gap-2 px-1 mr-2 shrink-0">
+            <BrandMark className="h-6 w-auto" size={24} />
+          </div>
+
+          {grouped.map(({ group, items }) => (
+            <div key={group} className="contents md:block md:mb-4">
+              <p className="hidden md:block section-label px-2.5 mb-1.5">{GROUP_LABEL[group]}</p>
+              {items.map((item) => {
+                const on = pathname === item.href || (item.href !== "/today" && pathname.startsWith(item.href));
+                const badgeTone =
+                  item.badgeTone === "stop"
+                    ? "bg-stop text-on-accent"
+                    : item.badgeTone === "warm"
+                      ? "bg-warm text-on-accent"
+                      : "bg-accent text-on-accent";
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={
+                      "flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-sm whitespace-nowrap transition-colors " +
+                      (on
+                        ? "bg-accent-soft text-ink font-semibold md:shadow-[inset_3px_0_0_var(--accent)]"
+                        : "text-muted hover:bg-bg hover:text-ink")
+                    }
+                  >
+                    {item.label}
+                    {!!item.badge && item.badge > 0 && (
+                      <span className={"text-[11px] rounded-full px-1.5 min-w-[1.25rem] text-center font-semibold " + badgeTone}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </div>
-        <div className="hidden md:block pt-2">
-          <Link href="/profile" className="block hover:text-accent">
-            <div className="text-sm font-medium">{user.fullName}</div>
-            <div className="text-xs text-muted mb-2">{user.role}</div>
-          </Link>
-          <ThemeToggle />
-          <Link
-            href="/profile"
-            className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
-          >
-            Profile
-          </Link>
-          <Link
-            href="/account"
-            className="text-xs text-muted hover:text-ink block w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
-          >
-            Change password
-          </Link>
-          <button
-            onClick={() => signOut({ callbackUrl: "/login" })}
-            className="text-xs text-muted hover:text-ink w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-bg"
-          >
-            Sign out
-          </button>
+
+        <div className="hidden md:block p-3 border-t border-rule space-y-2">
+          {streak > 0 && (
+            <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm">
+              <span className="text-warm font-semibold tabular-nums">{streak}</span>
+              <span className="text-dim text-xs">day streak</span>
+            </div>
+          )}
+
+          <div className="relative flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((o) => !o)}
+              className="flex-1 flex items-center gap-2.5 px-2 py-2 rounded-xl hover:bg-bg transition-colors text-left min-w-0"
+            >
+              <span className="w-8 h-8 rounded-full bg-accent-soft border border-accent/25 flex items-center justify-center text-[11px] font-bold text-accent shrink-0">
+                {initials(user.fullName)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium truncate">{user.fullName.split(" ")[0]}</span>
+                <span className="block text-[11px] text-dim">{roleLabel(user.role)}</span>
+              </span>
+            </button>
+            <ThemeToggle compact />
+
+            {menuOpen && (
+              <>
+                <button type="button" className="fixed inset-0 z-30 cursor-default" aria-label="Close menu" onClick={() => setMenuOpen(false)} />
+                <div className="absolute bottom-full left-0 right-0 mb-1 z-40 bg-panel border border-rule rounded-xl shadow-lift p-1.5 animate-fade-up">
+                  <Link
+                    href="/profile"
+                    onClick={() => setMenuOpen(false)}
+                    className="block text-sm px-3 py-2 rounded-lg text-muted hover:text-ink hover:bg-bg"
+                  >
+                    Profile
+                  </Link>
+                  <Link
+                    href="/account"
+                    onClick={() => setMenuOpen(false)}
+                    className="block text-sm px-3 py-2 rounded-lg text-muted hover:text-ink hover:bg-bg"
+                  >
+                    Change password
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => signOut({ callbackUrl: "/login" })}
+                    className="w-full text-left text-sm px-3 py-2 rounded-lg text-muted hover:text-ink hover:bg-bg"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </nav>
-      <main className="px-4 md:px-10 py-6 md:py-8 pb-28 max-w-[1060px] w-full">{children}</main>
-      <FlowPanel assistantName={assistantName} />
+
+      <div className="min-w-0 flex flex-col min-h-screen">
+        <main className="px-4 md:px-10 py-6 md:py-9 pb-24 md:pb-28 max-w-cockpit lg:max-w-wide w-full flex-1">{children}</main>
+        <FlowPanel assistantName={assistantName} />
+      </div>
     </div>
   );
 }

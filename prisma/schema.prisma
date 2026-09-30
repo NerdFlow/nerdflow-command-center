@@ -605,6 +605,12 @@ model Touch {
   outcome        TouchOutcome
   reason         String?       @db.Text
   body           String?       @db.Text
+  /// Which call script the rep used: "a" or "b". Null if they didn't pick one.
+  scriptUsed     String?       @map("script_used")
+  /// Rep's thumbs on that script: "up" or "down".
+  scriptRating   String?       @map("script_rating")
+  /// What the caller said, in the rep's words.
+  callerNote     String?       @map("caller_note") @db.Text
   externalRef    String?       @map("external_ref")
   sessionId      String?       @map("session_id")
   session        FocusSession? @relation(fields: [sessionId], references: [id])

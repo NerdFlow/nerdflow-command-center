@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Btn, Chip, Panel, Tabs } from "@/components/ui";
+import { Btn, Chip, Panel, SectionLabel, Tabs } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import type { CampaignStrategy } from "@/server/strategy";
 import {
@@ -81,23 +81,52 @@ export function CampaignDetail({
     }
   }
 
+  const statusLabel =
+    campaign.status === "active" ? "Live" : campaign.status === "paused" ? "Paused" : campaign.status.replace("_", " ");
+  const totalLeads = Object.values(campaign.leadCountByStatus).reduce((a, b) => a + b, 0);
+  const readyInFocus =
+    (campaign.leadCountByStatus["queued"] ?? 0) + (campaign.leadCountByStatus["in_cadence"] ?? 0);
+
   return (
-    <div>
-      <div className="flex justify-between items-start mb-1.5">
-        <div>
-          <h1 className="text-[28px] tracking-tight mb-0.5">{campaign.name}</h1>
-          <p className="text-muted m-0">
-            {campaign.productName} · owned by {campaign.ownerName}
+    <div className="animate-fade-up max-w-wide">
+      <div className="flex flex-wrap justify-between items-start gap-4 mb-2">
+        <div className="min-w-0">
+          <h1 className="page-title m-0 mb-1">{campaign.name}</h1>
+          <p className="text-muted text-sm m-0">
+            {campaign.productName} · {campaign.ownerName}
+            {campaign.location ? ` · ${campaign.location}` : ""}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Chip tone={campaign.status === "active" ? "go" : campaign.status === "paused" ? "stop" : "default"}>
-            {campaign.status.replace("_", " ")}
-          </Chip>
-        </div>
+        <Chip tone={campaign.status === "active" ? "go" : campaign.status === "paused" ? "stop" : "default"}>
+          {statusLabel}
+        </Chip>
       </div>
 
       <CampaignActions campaign={campaign} canManage={canManage} />
+
+      {(totalLeads > 0 || readyInFocus > 0) && (
+        <div className="flex flex-wrap gap-8 mb-8 mt-4">
+          <div>
+            <p className="stat-number text-accent m-0">{readyInFocus}</p>
+            <p className="text-xs text-dim mt-1.5 mb-0">ready in Focus</p>
+          </div>
+          <div>
+            <p className="stat-number m-0">{totalLeads}</p>
+            <p className="text-xs text-dim mt-1.5 mb-0">total leads</p>
+          </div>
+        </div>
+      )}
+
+      {readyInFocus > 0 && (
+        <div className="mb-8">
+          <Link
+            href="/focus"
+            className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3.5 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
+          >
+            Open Focus · {readyInFocus} ready
+          </Link>
+        </div>
+      )}
 
       <Tabs
         tabs={[
@@ -112,61 +141,67 @@ export function CampaignDetail({
       />
 
       {tab === "overview" && (
-        <div className="space-y-4">
-          <Panel>
-            <h2 className="text-[17px] font-medium mb-2">Plan</h2>
-            <p className="text-sm text-muted mb-3">{strategy.summary}</p>
-            <p className="text-sm">
-              <b>Goal:</b> {campaign.goal || "Not set"}
+        <div className="space-y-8">
+          <section>
+            <SectionLabel>Plan</SectionLabel>
+            <p className="text-[15px] leading-relaxed m-0 mb-3">{strategy.summary || "No summary yet."}</p>
+            <p className="text-sm text-muted m-0 mb-1">
+              <span className="text-ink font-medium">Goal:</span> {campaign.goal || "Not set"}
             </p>
-            <p className="text-sm">
-              <b>Kill rule:</b> {strategy.kill_rule}
+            <p className="text-sm text-muted m-0">
+              <span className="text-ink font-medium">Kill rule:</span> {strategy.kill_rule || "Not set"}
             </p>
-          </Panel>
-          <Panel>
-            <h2 className="text-[17px] font-medium mb-2">Leads by status</h2>
+          </section>
+
+          <section>
+            <SectionLabel>Leads by status</SectionLabel>
             <div className="flex gap-2 flex-wrap">
               {Object.entries(campaign.leadCountByStatus).map(([status, count]) => (
                 <Chip key={status}>
-                  {status}: {count}
+                  {status.replace(/_/g, " ")}: {count}
                 </Chip>
               ))}
-              {Object.keys(campaign.leadCountByStatus).length === 0 && <p className="text-sm text-muted">No leads yet.</p>}
+              {Object.keys(campaign.leadCountByStatus).length === 0 && (
+                <p className="text-sm text-muted m-0">No leads yet.</p>
+              )}
             </div>
-          </Panel>
-          <Panel>
-            <h2 className="text-[17px] font-medium mb-2">Results by channel</h2>
+          </section>
+
+          <section>
+            <SectionLabel>Results by channel</SectionLabel>
             {touchStats.length === 0 ? (
-              <p className="text-sm text-muted">No touches logged yet.</p>
+              <p className="text-sm text-muted m-0">No touches logged yet.</p>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-muted">
-                    <th className="text-left font-medium py-1">Channel</th>
-                    <th className="text-left font-medium py-1">Outcome</th>
-                    <th className="text-left font-medium py-1">Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {touchStats.map((t, i) => (
-                    <tr key={i} className="border-t border-rule">
-                      <td className="py-1.5">{CHANNEL_LABEL[t.channel]}</td>
-                      <td className="py-1.5">{t.outcome.replace("_", " ")}</td>
-                      <td className="py-1.5">{t.count}</td>
+              <div className="rounded-card border border-rule bg-panel overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-dim text-xs uppercase tracking-wide bg-panel2">
+                      <th className="text-left font-semibold px-4 py-2.5">Channel</th>
+                      <th className="text-left font-semibold px-4 py-2.5">Outcome</th>
+                      <th className="text-left font-semibold px-4 py-2.5">Count</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {touchStats.map((t, i) => (
+                      <tr key={i} className="border-t border-rule">
+                        <td className="px-4 py-2.5">{CHANNEL_LABEL[t.channel]}</td>
+                        <td className="px-4 py-2.5 text-muted">{t.outcome.replace("_", " ")}</td>
+                        <td className="px-4 py-2.5 font-semibold">{t.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-          </Panel>
-          <Panel>
-            <h2 className="text-[17px] font-medium mb-2">Lead engine status</h2>
-            <p className="text-sm text-muted">
-              Manual runs are live on the ICP and lead gen tab — searches Google for real businesses and lands
-              them in the Lead Inbox. Nightly automatic runs need a background worker, which isn&apos;t built yet;
-              CSV import on the Lead Inbox page still works in the meantime.
+          </section>
+
+          <section>
+            <SectionLabel>Lead engine</SectionLabel>
+            <p className="text-sm text-muted m-0 leading-relaxed">
+              Import a list from Campaigns, or run discovery on the ICP tab if Places is configured. New leads land in
+              Focus — nothing is sent to prospects.
             </p>
-          </Panel>
+          </section>
         </div>
       )}
 
@@ -608,6 +643,33 @@ function PlaybookEditor({
             + Add step
           </button>
         )}
+      </Panel>
+
+      <Panel>
+        <h3 className="text-sm font-medium mb-1">Call scripts</h3>
+        <p className="text-xs text-muted mb-3 m-0">
+          Two openers for Focus. Reps pick which one they used and thumbs up or down — no AI, just data for What&apos;s Working.
+        </p>
+        {(["a", "b"] as const).map((letter, idx) => (
+          <label key={letter} className="block text-xs text-muted mb-3">
+            Script {letter.toUpperCase()}
+            <textarea
+              className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg mt-1 text-sm"
+              rows={3}
+              disabled={!canManage}
+              placeholder={letter === "a" ? "Hi {name}, this is {me} from {product}…" : "Optional second opener to try"}
+              value={strategy.call_scripts?.[idx] ?? ""}
+              onChange={(e) =>
+                onChange((s) => {
+                  const next: [string, string] = [s.call_scripts?.[0] ?? "", s.call_scripts?.[1] ?? ""];
+                  next[idx] = e.target.value;
+                  return { ...s, call_scripts: next };
+                })
+              }
+            />
+          </label>
+        ))}
+        <p className="text-xs text-muted m-0">Placeholders: {"{name} {biz} {city} {me} {product}"}</p>
       </Panel>
 
       <Panel>

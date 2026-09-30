@@ -20,6 +20,7 @@
     "@google/genai": "^2.24.0",
     "@prisma/client": "^5.20.0",
     "bcryptjs": "^3.0.3",
+    "geist": "^1.7.2",
     "next": "14.2.35",
     "next-auth": "^4.24.8",
     "papaparse": "^5.4.1",

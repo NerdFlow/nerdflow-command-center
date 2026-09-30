@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { computeHealth, computeFlags, STAGE_ORDER, STAGE_LABEL } from "@/server/deals";
-import { Panel, Chip } from "@/components/ui";
+import { Chip } from "@/components/ui";
 
 export default async function DealsPage({ searchParams }: { searchParams: { rep?: string } }) {
   const user = await requireUser();
@@ -41,26 +41,27 @@ export default async function DealsPage({ searchParams }: { searchParams: { rep?
   });
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
+    <div className="animate-fade-up">
+      <div className="flex justify-between items-end mb-8 gap-4 flex-wrap">
         <div>
-          <h1 className="text-[28px] tracking-tight mb-1.5">Deals</h1>
-          <p className="text-muted m-0">
-            {wonCount} won · {lostCount} lost
+          <h1 className="page-title m-0 mb-1">Deals</h1>
+          <p className="text-muted text-sm m-0">
+            <span className="text-ink font-semibold">{wonCount}</span> won ·{" "}
+            <span className="text-dim">{lostCount}</span> lost
           </p>
         </div>
         {isManager && reps.length > 0 && (
           <form method="get" className="flex items-center gap-2 text-sm">
-            <select name="rep" defaultValue={searchParams.rep ?? ""} className="border border-rule rounded-lg px-2 py-1 bg-panel">
-              <option value="">Team</option>
+            <select name="rep" defaultValue={searchParams.rep ?? ""} className="border border-rule rounded-xl px-3 py-2 bg-panel">
+              <option value="">Whole team</option>
               {reps.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.fullName}
                 </option>
               ))}
             </select>
-            <button type="submit" className="text-accent font-medium">
-              Apply
+            <button type="submit" className="text-accent font-medium px-2">
+              Show
             </button>
           </form>
         )}
@@ -70,19 +71,19 @@ export default async function DealsPage({ searchParams }: { searchParams: { rep?
         {STAGE_ORDER.map((stage) => {
           const cards = withHealth.filter((d) => d.deal.stage === stage).sort((a, b) => a.health - b.health);
           return (
-            <div key={stage} className="bg-panel2 rounded-card p-2.5 min-h-[160px]">
-              <div className="text-xs font-semibold text-muted mb-2 px-1">
-                {STAGE_LABEL[stage]} ({cards.length})
+            <div key={stage} className="bg-panel2/80 rounded-card p-2.5 min-h-[160px]">
+              <div className="section-label px-1 mb-2">
+                {STAGE_LABEL[stage]} · {cards.length}
               </div>
               {cards.map(({ deal, flags, health }) => (
                 <Link key={deal.id} href={`/deals/${deal.id}`}>
-                  <div className="bg-panel border border-rule rounded-lg px-3 py-2.5 mb-2 hover:border-accent">
-                    <div className="text-sm font-medium">{deal.lead.businessName}</div>
-                    <div className="text-xs text-muted mb-1.5">
-                      {deal.product.name} {isManager && `· ${deal.owner.fullName}`}
+                  <div className="bg-panel border border-rule rounded-xl px-3 py-2.5 mb-2 hover:border-accent/40 transition-colors">
+                    <div className="text-sm font-semibold">{deal.lead.businessName}</div>
+                    <div className="text-xs text-dim mb-1.5">
+                      {deal.product.name} {isManager && `· ${deal.owner.fullName.split(" ")[0]}`}
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold">{health}</span>
+                      <span className="text-xs font-semibold tabular-nums text-muted">{health}</span>
                       {flags[0] && <Chip tone="stop">{flags[0].label}</Chip>}
                     </div>
                   </div>
@@ -94,9 +95,7 @@ export default async function DealsPage({ searchParams }: { searchParams: { rep?
       </div>
 
       {open.length === 0 && (
-        <Panel className="mt-4">
-          <p className="text-muted">No open deals yet — mark a lead Interested in Focus mode to start one.</p>
-        </Panel>
+        <p className="text-muted text-sm mt-6">No open deals yet — mark a lead Interested in Focus to start one.</p>
       )}
     </div>
   );

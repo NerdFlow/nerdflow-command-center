@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { scheduleNextTouch, type WorkingHours } from "@/server/cadence";
+import { planNextCadenceStep, scheduleNextTouch, type WorkingHours } from "@/server/cadence";
 import { incrementDailyCount } from "@/server/targets";
 import { writeAuditLog } from "@/server/audit";
 import type { CampaignStrategy } from "@/server/strategy";
@@ -26,6 +26,12 @@ export async function logTouchOutcome(params: {
   /** Required for outcome "meeting_booked". */
   meetingAt?: string;
   meetingNote?: string;
+  /** Call Focus: which script the rep said ("a" | "b"). Optional — never blocks the outcome. */
+  scriptUsed?: "a" | "b";
+  /** Call Focus: thumbs on that script. */
+  scriptRating?: "up" | "down";
+  /** Call Focus: what the caller said, in the rep's words. */
+  callerNote?: string;
 }) {
   const user = await requireUser();
   const leadOrNull = await prisma.lead.findFirst({
@@ -82,28 +88,33 @@ export async function logTouchOutcome(params: {
       return null;
     }
 
-    // sent / no_answer / voicemail / talked_not_now — advance the cadence, with an optional channel handoff
+    // sent / no_answer / voicemail / talked_not_now — advance the cadence, with an optional channel handoff.
+    // Skips cadence steps whose channel is not in the campaign's allowed channels (email-only never gets a call).
     const strategy = lead.campaign.strategy as unknown as CampaignStrategy;
-    const cadence = strategy?.cadence ?? [];
-    const currentStepDef = cadence[step];
-    const nextStepDef = cadence[step + 1];
+    const planned = planNextCadenceStep({
+      strategy,
+      currentStep: step,
+      followUpChannel: params.followUpChannel,
+    });
 
-    if (!nextStepDef && !params.followUpChannel) {
-      await prisma.lead.update({ where: { id: lead.id }, data: { status: "finished" } });
+    if (planned.finished) {
+      await prisma.lead.update({ where: { id: lead.id }, data: { status: "finished", nextChannelOverride: null } });
     } else {
-      const dayDelta = nextStepDef ? nextStepDef.day - (currentStepDef?.day ?? 0) : 1;
       const nextTouchAt = scheduleNextTouch({
         occurredAt: now,
-        dayDelta,
+        dayDelta: planned.dayDelta,
         timezone: lead.owner.timezone,
         workingHours: lead.owner.workingHours as unknown as WorkingHours,
       });
       // Per-lead only — never mutate the campaign's shared cadence, which every other lead reads too.
-      const nextDefaultChannel = nextStepDef?.channel ?? currentStepDef?.channel;
-      const nextChannelOverride = params.followUpChannel && params.followUpChannel !== nextDefaultChannel ? params.followUpChannel : null;
       await prisma.lead.update({
         where: { id: lead.id },
-        data: { status: "in_cadence", cadenceStep: step + 1, nextTouchAt, nextChannelOverride },
+        data: {
+          status: "in_cadence",
+          cadenceStep: planned.cadenceStep,
+          nextTouchAt,
+          nextChannelOverride: planned.nextChannelOverride,
+        },
       });
     }
     return null;
@@ -119,6 +130,13 @@ export async function logTouchOutcome(params: {
         step,
         outcome: params.outcome,
         occurredAt: now,
+        ...(params.channel === "call"
+          ? {
+              scriptUsed: params.scriptUsed ?? null,
+              scriptRating: params.scriptRating ?? null,
+              callerNote: params.callerNote?.trim() || null,
+            }
+          : {}),
       },
     }),
     incrementDailyCount(user.id, user.organizationId, params.channel),
@@ -129,7 +147,13 @@ export async function logTouchOutcome(params: {
       action: "touch_logged",
       entityType: "lead",
       entityId: lead.id,
-      after: { channel: params.channel, outcome: params.outcome },
+      after: {
+        channel: params.channel,
+        outcome: params.outcome,
+        ...(params.channel === "call" && params.scriptUsed
+          ? { scriptUsed: params.scriptUsed, scriptRating: params.scriptRating ?? null }
+          : {}),
+      },
     }),
   ]);
 
@@ -152,6 +176,7 @@ export async function logTouchOutcome(params: {
   revalidatePath("/focus");
   revalidatePath("/today");
   revalidatePath("/deals");
+  revalidatePath("/whats-working");
 
   return { dealId };
 }

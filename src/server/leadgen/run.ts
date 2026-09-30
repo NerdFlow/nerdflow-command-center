@@ -139,7 +139,9 @@ export async function executeLeadDiscoveryRun(params: {
           fitReasons: result.reasons,
           fitFlags: result.flags,
           dedupeKey,
-          status: "inbox",
+          // Owner's queue (Focus) — no separate Lead Inbox approval step.
+          status: "queued",
+          nextTouchAt: new Date(),
         },
       });
       created += 1;

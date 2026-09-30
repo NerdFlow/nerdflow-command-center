@@ -2,43 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dark-first: bare :root is the dark palette (product doc v2: "dark mode
-   default, light mode supported"). Light mode only applies when the user
-   explicitly toggles it via [data-theme="light"], persisted in
-   localStorage by ThemeToggle - it does not follow system preference. */
+/*
+ * NerdFlow brand tokens — match nerdflow.tech (--nf-*).
+ * Dark-first. Light via [data-theme="light"] using the kit’s off-white / primary-dark values.
+ * Functional stop/warm/cold are not brand primaries.
+ */
 :root {
-  --bg: #050807;
-  --panel: #0b1210;
-  --panel2: #121a17;
+  --bg: #050807; /* nf-black */
+  --panel: #0b1210; /* nf-rich-black */
+  --panel2: #121a17; /* nf-soft-black */
   --ink: #ffffff;
-  --muted: #b8c9c2;
-  --rule: #1d2925;
-  --signal: #72ecc0;
-  --signal-soft: #10251d;
+  --muted: #b8c9c2; /* nf-muted-white */
+  --rule: #1d2925; /* nf-charcoal */
+  --signal: #34e0a1; /* nf-primary */
+  --signal-soft: rgba(8, 122, 87, 0.28);
   --go: #34e0a1;
-  --go-soft: #10251d;
+  --go-soft: rgba(8, 122, 87, 0.28);
   --stop: #f08a74;
   --stop-soft: #2e1712;
   --warm: #f0b429;
   --warm-soft: #2e2410;
   --cold: #8a9992;
   --cold-soft: #16201c;
-  --accent: #34e0a1;
-  --accent-hover: #20b982;
-  --accent-soft: #10251d;
+  --accent: #34e0a1; /* nf-primary */
+  --accent-hover: #20b982; /* nf-primary-dark */
+  --accent-soft: rgba(8, 122, 87, 0.28); /* nf-primary-deep @ soft */
   --on-accent: #050807;
+  --dim: #6b7e78;
+  --shell-pad: 1.5rem;
 }
 
 :root[data-theme="light"] {
-  --bg: #f5faf8;
+  --bg: #f5faf8; /* nf-off-white */
   --panel: #ffffff;
-  --panel2: #e8f2ee;
+  --panel2: #e8f2ee; /* nf-soft-white */
   --ink: #050807;
-  --muted: #42524c;
+  --muted: #42524c; /* nf-light-body */
   --rule: #d5e3dd;
-  --signal: #087a57;
-  --signal-soft: #d8faed;
-  --go: #087a57;
+  --signal: #20b982; /* nf-primary-dark */
+  --signal-soft: #d8faed; /* nf-primary-pale */
+  --go: #20b982;
   --go-soft: #d8faed;
   --stop: #b4432f;
   --stop-soft: #f8e1dc;
@@ -47,27 +50,53 @@
   --cold: #6b7a74;
   --cold-soft: #eef3f0;
   --accent: #20b982;
-  --accent-hover: #087a57;
+  --accent-hover: #087a57; /* nf-primary-deep */
   --accent-soft: #d8faed;
   --on-accent: #050807;
+  --dim: #6b7a74;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
 }
 
+html {
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
 body {
   background: var(--bg);
   color: var(--ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Theme-switched wordmarks (no JS flicker) */
+.brand-logo-light {
+  display: none;
+}
+:root[data-theme="light"] .brand-logo-dark {
+  display: none;
+}
+:root[data-theme="light"] .brand-logo-light {
+  display: block;
 }
 
 ::selection {
   background: var(--accent);
   color: #050807;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @keyframes pulse-orb {
@@ -80,16 +109,81 @@ body {
 }
 
 @keyframes fade-up {
-  from { transform: translateY(8px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 .animate-fade-up {
-  animation: fade-up 0.2s ease-out;
+  animation: fade-up 0.28s ease-out;
 }
 
 @keyframes btn-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .btn-spinner {
   animation: btn-spin 0.6s linear infinite;
+}
+
+/* Soft radial atmosphere — cockpit, not flat SaaS */
+.app-atmosphere {
+  background:
+    radial-gradient(ellipse 80% 50% at 0% -10%, rgba(8, 122, 87, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(52, 224, 161, 0.05), transparent 50%),
+    var(--bg);
+}
+
+:root[data-theme="light"] .app-atmosphere {
+  background:
+    radial-gradient(ellipse 80% 50% at 0% -10%, rgba(32, 185, 130, 0.12), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(8, 122, 87, 0.06), transparent 50%),
+    var(--bg);
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.page-title {
+  font-size: clamp(1.5rem, 2.2vw, 1.85rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.next-action {
+  font-size: clamp(1.35rem, 2.4vw, 1.75rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.stat-number {
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.quiet-link {
+  color: var(--dim);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+.quiet-link:hover {
+  color: var(--accent);
 }

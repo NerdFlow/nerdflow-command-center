@@ -2,11 +2,21 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
 import { getOrgSettings } from "@/server/settings";
-import { campaignStrategySchema, generateCampaignStrategy, estimateStrategyCostUsd, type CampaignStrategy } from "@/server/strategy";
+import {
+  campaignStrategySchema,
+  generateCampaignStrategy,
+  estimateStrategyCostUsd,
+  type CampaignStrategy,
+  channelSchema,
+} from "@/server/strategy";
+import { runResearchAndIcp } from "@/server/actions/campaignWizard";
+import { startLeadGenRun } from "@/server/actions/leadgen";
+import { googlePlacesSource } from "@/server/leadgen/sources/googlePlaces";
 
 export async function createProduct(input: { name: string; type: "product" | "service"; summary: string }) {
   const user = await requireUser();
@@ -27,21 +37,56 @@ export async function estimateNewCampaignCostUsd(input: {
   return estimateStrategyCostUsd(input);
 }
 
-export async function createCampaign(input: {
-  productId: string;
-  name: string;
-  ownerId?: string;
-  location?: string;
-  goal?: string;
-  buyerGuess?: string;
-}) {
+const launchInputSchema = z.object({
+  productId: z.string().min(1),
+  name: z.string().min(1),
+  ownerId: z.string().optional(),
+  location: z.string().min(1),
+  buyerGuess: z.string().min(1),
+  goal: z.string().optional(),
+  channels: z.array(channelSchema).min(1),
+  researchMarket: z.boolean(),
+  maxLeads: z.number().int().min(1).max(50).default(15),
+});
+
+export type LaunchCampaignResult = {
+  campaignId: string;
+  campaignName: string;
+  notices: string[];
+  research: {
+    ran: boolean;
+    ok: boolean;
+    snapshot: string | null;
+    sourceCount: number;
+    whoToTarget: string | null;
+    reason?: string;
+  };
+  scraping: {
+    attempted: boolean;
+    ok: boolean;
+    found: number;
+    created: number;
+    duplicates: number;
+    reason?: string;
+  };
+};
+
+/**
+ * One-sitting create: save campaign → optional research+ICP → Places scrape.
+ * Never blocks on missing AI/Places keys — campaign always saves; notices say what skipped.
+ */
+export async function launchCampaign(raw: z.infer<typeof launchInputSchema>): Promise<LaunchCampaignResult> {
+  const input = launchInputSchema.parse(raw);
   const user = await requireUser();
   const settings = await getOrgSettings();
   const ownerId = user.role === "rep" ? user.id : input.ownerId || user.id;
 
   const [product, existingCampaigns] = await Promise.all([
     prisma.product.findFirstOrThrow({ where: { id: input.productId, organizationId: user.organizationId } }),
-    prisma.campaign.findMany({ where: { productId: input.productId, organizationId: user.organizationId }, select: { name: true, location: true } }),
+    prisma.campaign.findMany({
+      where: { productId: input.productId, organizationId: user.organizationId },
+      select: { name: true, location: true },
+    }),
   ]);
 
   const generated = await generateCampaignStrategy({
@@ -56,7 +101,29 @@ export async function createCampaign(input: {
     existingCampaigns: existingCampaigns.map((c) => `${c.name} (${c.location ?? "no location set"})`).join("; ") || undefined,
   });
 
-  // No approval gate — a campaign goes live the moment it's created.
+  const preferred = input.channels;
+  const strategy: CampaignStrategy = {
+    ...generated.strategy,
+    channels: preferred.map((ch) => {
+      const existing = generated.strategy.channels.find((c) => c.channel === ch);
+      return existing ?? { channel: ch, why: "Selected when this campaign was created." };
+    }),
+    lead_gen: {
+      ...generated.strategy.lead_gen,
+      search_queries:
+        !input.researchMarket && input.buyerGuess
+          ? [`${input.buyerGuess} in ${input.location}`]
+          : generated.strategy.lead_gen.search_queries.length > 0
+            ? generated.strategy.lead_gen.search_queries
+            : [`${input.buyerGuess} in ${input.location}`],
+    },
+  };
+
+  const notices: string[] = [];
+  if (generated.source !== "ai") {
+    notices.push(`Playbook used a template — AI was unavailable (${generated.reason}).`);
+  }
+
   const campaign = await prisma.campaign.create({
     data: {
       organizationId: user.organizationId,
@@ -64,9 +131,9 @@ export async function createCampaign(input: {
       name: input.name,
       ownerId,
       status: "active",
-      goal: input.goal,
+      goal: input.goal || input.buyerGuess,
       location: input.location,
-      strategy: generated.strategy as unknown as object,
+      strategy: strategy as unknown as object,
       leadDailyCap: settings.leadDailyCapDefault,
     },
   });
@@ -90,11 +157,104 @@ export async function createCampaign(input: {
     action: "campaign_created",
     entityType: "campaign",
     entityId: campaign.id,
-    after: { name: campaign.name, status: campaign.status, strategySource: generated.source },
+    after: { name: campaign.name, status: campaign.status, strategySource: generated.source, researchMarket: input.researchMarket },
   });
 
+  const researchSummary: LaunchCampaignResult["research"] = {
+    ran: input.researchMarket,
+    ok: false,
+    snapshot: null,
+    sourceCount: 0,
+    whoToTarget: null,
+  };
+
+  if (input.researchMarket) {
+    const rr = await runResearchAndIcp(campaign.id);
+    if (rr.ok && rr.research) {
+      researchSummary.ok = true;
+      researchSummary.snapshot = rr.research.marketSnapshot;
+      researchSummary.sourceCount = Array.isArray(rr.research.sources) ? (rr.research.sources as unknown[]).length : 0;
+      researchSummary.whoToTarget = rr.icp
+        ? `${rr.icp.name}: ${((rr.icp.businessTypes as string[]) ?? []).slice(0, 3).join(", ")}`
+        : null;
+    } else {
+      researchSummary.reason = rr.reason ?? "Research did not complete.";
+      notices.push(
+        rr.stage === "research"
+          ? `Market research did not run (${rr.reason}). Scraping will use your description as the search.`
+          : `Who-to-target step did not finish (${rr.reason}). Scraping will use the playbook queries.`,
+      );
+    }
+  }
+
+  const scraping: LaunchCampaignResult["scraping"] = {
+    attempted: false,
+    ok: false,
+    found: 0,
+    created: 0,
+    duplicates: 0,
+  };
+
+  if (!googlePlacesSource.isConfigured()) {
+    scraping.reason =
+      "GOOGLE_PLACES_API_KEY is not set — scraping did not start. The campaign is saved; add the key and run discovery from the campaign page, or import a list.";
+    notices.push(scraping.reason);
+  } else if (!input.location.trim()) {
+    scraping.reason = "No geography set — scraping did not start.";
+    notices.push(scraping.reason);
+  } else {
+    scraping.attempted = true;
+    const keywords = !input.researchMarket && input.buyerGuess ? [`${input.buyerGuess} in ${input.location}`] : [];
+    const run = await startLeadGenRun(campaign.id, {
+      location: input.location,
+      keywords,
+      maxLeads: input.maxLeads,
+    });
+    if (run.status === "failed") {
+      scraping.reason = run.error ?? "Scraping failed.";
+      notices.push(`Scraping failed: ${scraping.reason}`);
+    } else {
+      scraping.ok = true;
+      scraping.found = run.found;
+      scraping.created = run.new;
+      scraping.duplicates = run.duplicates;
+    }
+  }
+
   revalidatePath("/campaigns");
-  redirect(`/campaigns/${campaign.id}`);
+  revalidatePath("/focus");
+  revalidatePath(`/campaigns/${campaign.id}`);
+
+  return {
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    notices,
+    research: researchSummary,
+    scraping,
+  };
+}
+
+/** Bare create + redirect — prefer launchCampaign for the one-sitting flow. */
+export async function createCampaign(input: {
+  productId: string;
+  name: string;
+  ownerId?: string;
+  location?: string;
+  goal?: string;
+  buyerGuess?: string;
+}) {
+  const result = await launchCampaign({
+    productId: input.productId,
+    name: input.name,
+    ownerId: input.ownerId,
+    location: input.location || "unspecified",
+    buyerGuess: input.buyerGuess || "businesses that need this",
+    goal: input.goal,
+    channels: ["call", "email"],
+    researchMarket: false,
+    maxLeads: 10,
+  });
+  redirect(`/campaigns/${result.campaignId}`);
 }
 
 async function assertCanEditCampaign(campaignId: string) {

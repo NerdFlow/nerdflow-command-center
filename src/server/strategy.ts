@@ -28,12 +28,30 @@ export const campaignStrategySchema = z.object({
     score_boost: z.array(z.string()),
   }),
   kill_rule: z.string(),
+  /** Two call openers typed by a person — A/B data collection, no AI. */
+  call_scripts: z
+    .tuple([z.string(), z.string()])
+    .optional()
+    .transform((v): [string, string] => (v ?? ["", ""]) as [string, string]),
 });
 
 export type CampaignStrategy = z.infer<typeof campaignStrategySchema>;
 
 function fillPlaceholders(template: string, values: Record<string, string>) {
   return template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? `{${key}}`);
+}
+
+export function getCallScripts(strategy: CampaignStrategy | null | undefined): [string, string] {
+  const scripts = strategy?.call_scripts;
+  if (Array.isArray(scripts) && scripts.length >= 2) return [scripts[0] ?? "", scripts[1] ?? ""];
+  return ["", ""];
+}
+
+export function renderScriptTemplate(
+  template: string,
+  values: { name: string; biz: string; city: string; me: string; product: string },
+) {
+  return fillPlaceholders(template, values);
 }
 
 export function renderMessage(
@@ -117,6 +135,7 @@ export function fallbackStrategy(input: {
       score_boost: ["Shows a public trigger signal"],
     },
     kill_rule: "Pause at 150 touches if reply rate is under 1% or bounce rate is over 5%.",
+    call_scripts: ["", ""],
   };
 }
 
@@ -184,7 +203,11 @@ export async function generateCampaignStrategy(
     });
     // Belt-and-suspenders: force the approved ICP through exactly as approved,
     // regardless of what the model actually did with it.
-    const finalStrategy = input.approvedIcp ? { ...strategy, icp: input.approvedIcp } : strategy;
+    const finalStrategy: CampaignStrategy = {
+      ...strategy,
+      call_scripts: strategy.call_scripts ?? ["", ""],
+      ...(input.approvedIcp ? { icp: input.approvedIcp } : {}),
+    };
     return { strategy: finalStrategy, source: "ai", promptVersion: PROMPT_VERSION };
   } catch (err) {
     const reason = err instanceof AiUnavailableError ? err.message : "unexpected error generating strategy";

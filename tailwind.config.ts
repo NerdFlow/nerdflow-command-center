@@ -6,7 +6,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-sora)", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
       },
       colors: {
         bg: "var(--bg)",
@@ -29,9 +29,19 @@ const config: Config = {
         "accent-hover": "var(--accent-hover)",
         "accent-soft": "var(--accent-soft)",
         "on-accent": "var(--on-accent)",
+        dim: "var(--dim)",
       },
       borderRadius: {
-        card: "12px",
+        card: "14px",
+        xl2: "18px",
+      },
+      boxShadow: {
+        soft: "0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px -12px rgba(0,0,0,0.45)",
+        lift: "0 12px 40px -16px rgba(0,0,0,0.55)",
+      },
+      maxWidth: {
+        cockpit: "720px",
+        wide: "1100px",
       },
     },
   },
