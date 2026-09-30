@@ -3,7 +3,7 @@ import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { Chip, Btn, SectionLabel } from "@/components/ui";
 import { campaignStrategySchema } from "@/server/strategy";
-import { CampaignStatus } from "@prisma/client";
+import { CampaignStatus, Prisma } from "@prisma/client";
 import { CampaignsImportSlot } from "@/components/CampaignsImportSlot";
 
 const GROUPS: { status: CampaignStatus; label: string }[] = [
@@ -21,20 +21,37 @@ export default async function CampaignsPage() {
   const user = await requireUser();
   const isManager = user.role !== "rep";
 
-  const [campaigns, importCampaigns, reps] = await Promise.all([
-    prisma.campaign.findMany({
-      where: {
-        organizationId: user.organizationId,
-        ...(isManager ? {} : { ownerId: user.id }),
-        status: { not: "draft" },
-      },
-      include: {
-        product: true,
-        owner: true,
-        _count: { select: { leads: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
+  const [campaignRows, importCampaigns, reps] = await Promise.all([
+    // One round trip. Prisma's include would query product, owner, and counts separately,
+    // and each hop to the database is a few hundred milliseconds from here.
+    prisma.$queryRaw<
+      Array<{
+        id: string;
+        name: string;
+        status: CampaignStatus;
+        is_demo: boolean;
+        paused_reason: string | null;
+        product_name: string;
+        owner_name: string;
+        lead_count: number;
+      }>
+    >`
+      SELECT c.id,
+             c.name,
+             c.status,
+             c.is_demo,
+             c.paused_reason,
+             p.name AS product_name,
+             u.full_name AS owner_name,
+             (SELECT COUNT(*)::int FROM leads l WHERE l.campaign_id = c.id) AS lead_count
+      FROM campaigns c
+      JOIN products p ON p.id = c.product_id
+      JOIN users u ON u.id = c.owner_id
+      WHERE c.organization_id = ${user.organizationId}
+        AND c.status::text <> 'draft'
+        ${isManager ? Prisma.empty : Prisma.sql`AND c.owner_id = ${user.id}`}
+      ORDER BY c.created_at DESC
+    `,
     prisma.campaign.findMany({
       where: {
         organizationId: user.organizationId,
@@ -54,6 +71,17 @@ export default async function CampaignsPage() {
       select: { id: true, fullName: true },
     }),
   ]);
+
+  const campaigns = campaignRows.map((c) => ({
+    id: c.id,
+    name: c.name,
+    status: c.status,
+    isDemo: c.is_demo,
+    pausedReason: c.paused_reason,
+    product: { name: c.product_name },
+    owner: { fullName: c.owner_name },
+    _count: { leads: Number(c.lead_count) },
+  }));
 
   return (
     <div className="animate-fade-up max-w-wide">

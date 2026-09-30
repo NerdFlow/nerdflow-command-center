@@ -76,7 +76,7 @@ export function CampaignWizardClient({
         </div>
 
         {!research ? (
-          <Btn variant="primary" disabled={busy !== null} onClick={() => run("research", async () => {
+          <Btn variant="primary" disabled={busy !== null} loading={busy === "research"} onClick={() => run("research", async () => {
             const r = await generateResearch(campaignId);
             if (r.source === "ai") setResearch({ ...r.research, marketSnapshot: r.research.marketSnapshot, buyers: r.research.buyers as any, painPoints: r.research.painPoints as any, competitors: r.research.competitors as any, channels: r.research.channels as any, angles: r.research.angles as any, sources: r.research.sources as any, approved: false });
             else setError(`AI unavailable (${r.reason}) — market research needs GEMINI_API_KEY configured.`);
@@ -121,7 +121,7 @@ export function CampaignWizardClient({
               </ul>
             </div>
             <div className="flex gap-2">
-              <Btn size="sm" variant="ghost" disabled={busy !== null} onClick={() => run("research", async () => {
+              <Btn size="sm" variant="ghost" disabled={busy !== null} loading={busy === "research"} onClick={() => run("research", async () => {
                 const r = await generateResearch(campaignId);
                 if (r.source === "ai") setResearch({ ...r.research, marketSnapshot: r.research.marketSnapshot, buyers: r.research.buyers as any, painPoints: r.research.painPoints as any, competitors: r.research.competitors as any, channels: r.research.channels as any, angles: r.research.angles as any, sources: r.research.sources as any, approved: false });
                 else setError(`AI unavailable (${r.reason})`);
@@ -129,7 +129,7 @@ export function CampaignWizardClient({
                 Regenerate
               </Btn>
               {!research.approved && (
-                <Btn size="sm" variant="primary" disabled={busy !== null} onClick={() => run("approveResearch", async () => {
+                <Btn size="sm" variant="primary" disabled={busy !== null} loading={busy === "approveResearch"} onClick={() => run("approveResearch", async () => {
                   await approveResearch(campaignId);
                   setResearch((r) => (r ? { ...r, approved: true } : r));
                 })}>
@@ -149,7 +149,7 @@ export function CampaignWizardClient({
         </div>
 
         {!icp ? (
-          <Btn variant="primary" disabled={busy !== null || !research?.approved} onClick={() => run("icp", async () => {
+          <Btn variant="primary" disabled={busy !== null || !research?.approved} loading={busy === "icp"} onClick={() => run("icp", async () => {
             const r = await generateIcp(campaignId);
             if (r.source === "ai") setIcp({ name: r.icp.name, businessTypes: r.icp.businessTypes as any, keywords: r.icp.keywords as any, sizeSignals: r.icp.sizeSignals, mustHave: r.icp.mustHave as any, niceToHave: r.icp.niceToHave as any, disqualifiers: r.icp.disqualifiers as any, decisionMakerTitles: r.icp.decisionMakerTitles as any });
             else setError(`AI unavailable (${r.reason})`);
@@ -165,7 +165,7 @@ export function CampaignWizardClient({
             <p className="text-sm m-0">Disqualifiers: {icp.disqualifiers.join(", ")}</p>
             <p className="text-sm m-0">Decision-makers: {icp.decisionMakerTitles.join(", ")}</p>
             <div className="flex gap-2 mt-2">
-              <Btn size="sm" variant="ghost" disabled={busy !== null} onClick={() => run("icp", async () => {
+              <Btn size="sm" variant="ghost" disabled={busy !== null} loading={busy === "icp"} onClick={() => run("icp", async () => {
                 const r = await generateIcp(campaignId);
                 if (r.source === "ai") setIcp({ name: r.icp.name, businessTypes: r.icp.businessTypes as any, keywords: r.icp.keywords as any, sizeSignals: r.icp.sizeSignals, mustHave: r.icp.mustHave as any, niceToHave: r.icp.niceToHave as any, disqualifiers: r.icp.disqualifiers as any, decisionMakerTitles: r.icp.decisionMakerTitles as any });
               })}>
@@ -186,7 +186,7 @@ export function CampaignWizardClient({
         <h2 className="text-[17px] font-medium mb-3">3. Playbook</h2>
 
         {!playbook ? (
-          <Btn variant="primary" disabled={busy !== null || !icpApprovedLocally} onClick={() => run("playbook", async () => {
+          <Btn variant="primary" disabled={busy !== null || !icpApprovedLocally} loading={busy === "playbook"} onClick={() => run("playbook", async () => {
             const r = await generatePlaybook(campaignId);
             setPlaybook(r);
           })}>
@@ -198,7 +198,7 @@ export function CampaignWizardClient({
             <p className="text-sm">{playbook.strategy.summary}</p>
             <p className="text-sm m-0">Channels: {playbook.strategy.channels.map((c) => c.channel).join(", ")}</p>
             <p className="text-sm m-0">Cadence: {playbook.strategy.cadence.length} touches</p>
-            <Btn variant="primary" disabled={busy !== null} onClick={() => run("approvePlaybook", async () => {
+            <Btn variant="primary" disabled={busy !== null} loading={busy === "approvePlaybook"} onClick={() => run("approvePlaybook", async () => {
               await approvePlaybook(campaignId, playbook.strategy);
               router.push(`/campaigns/${campaignId}`);
             })}>

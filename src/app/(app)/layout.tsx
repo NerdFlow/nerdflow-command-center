@@ -1,8 +1,8 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth";
-import { prisma } from "@/server/db";
-import { getOrgSettings } from "@/server/settings";
 import { AppShell, type NavItem } from "@/components/AppShell";
+import { ShellExtras } from "@/components/ShellExtras";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -12,39 +12,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/profile?setup=1");
   }
 
-  const [dueNowCount, openReplies, oldestOpenReply, settings, latestStat] = await Promise.all([
-    prisma.lead.count({
-      where: {
-        ownerId: user.id,
-        organizationId: user.organizationId,
-        OR: [{ status: "queued" }, { status: "in_cadence", nextTouchAt: { lte: new Date() } }],
-      },
-    }),
-    prisma.reply.count({ where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } } }),
-    prisma.reply.findFirst({
-      where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } },
-      orderBy: { receivedAt: "asc" },
-      select: { receivedAt: true },
-    }),
-    getOrgSettings(),
-    prisma.dailyStat.findFirst({ where: { userId: user.id, closedOutAt: { not: null } }, orderBy: { date: "desc" } }),
-  ]);
-
-  const replyAgeHours = oldestOpenReply
-    ? (Date.now() - new Date(oldestOpenReply.receivedAt).getTime()) / (1000 * 60 * 60)
-    : 0;
-  const repliesUrgent = openReplies > 0 && replyAgeHours >= 24;
-
   const navItems: NavItem[] = [
     { href: "/today", label: "Today", group: "work" },
-    { href: "/focus", label: "Focus", badge: dueNowCount, group: "work" },
-    {
-      href: "/replies",
-      label: "Replies",
-      badge: openReplies,
-      badgeTone: repliesUrgent ? "stop" : openReplies > 0 ? "warm" : "accent",
-      group: "work",
-    },
+    { href: "/focus", label: "Focus", group: "work" },
+    { href: "/replies", label: "Replies", group: "work" },
     { href: "/campaigns", label: "Campaigns", group: "pipeline" },
     { href: "/deals", label: "Deals", group: "pipeline" },
     { href: "/whats-working", label: "What's Working", group: "pipeline" },
@@ -60,8 +31,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <AppShell
       user={{ fullName: user.fullName, email: user.email, role: user.role }}
       navItems={navItems}
-      streak={latestStat?.streakAfter ?? 0}
-      assistantName={settings.assistantName}
+      extras={
+        <Suspense fallback={null}>
+          <ShellExtras userId={user.id} organizationId={user.organizationId} />
+        </Suspense>
+      }
     >
       {children}
     </AppShell>

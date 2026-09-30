@@ -27,7 +27,7 @@ export function Btn({
   loading?: boolean;
 }) {
   const base =
-    "border rounded-xl font-medium disabled:opacity-55 disabled:cursor-default transition-colors inline-flex items-center justify-center gap-1.5";
+    "border rounded-xl font-medium disabled:opacity-55 disabled:cursor-default transition-all duration-150 inline-flex items-center justify-center gap-1.5 active:scale-[0.97] active:brightness-95";
   const sizes =
     size === "lg"
       ? "px-5 py-3 text-[15px]"
@@ -43,9 +43,9 @@ export function Btn({
     ghost: "bg-transparent border-transparent text-muted hover:bg-panel2 hover:text-ink",
   };
   return (
-    <button className={cx(base, sizes, variants[variant], className)} disabled={disabled || loading} {...props}>
+    <button className={cx(base, sizes, variants[variant], className)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>
       {loading && (
-        <svg className="btn-spinner shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none">
+        <svg className="btn-spinner shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
           <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />
           <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>

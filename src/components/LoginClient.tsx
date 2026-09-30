@@ -51,7 +51,13 @@ export function LoginClient({ callbackUrl, allowedDomain }: { callbackUrl: strin
 
       {error && <p className="text-sm text-stop">{error}</p>}
 
-      <Btn variant="primary" className="w-full justify-center" disabled={!email || !password || submitting} onClick={submit}>
+      <Btn
+        variant="primary"
+        className="w-full justify-center"
+        disabled={!email || !password}
+        loading={submitting}
+        onClick={submit}
+      >
         {submitting ? "Signing in…" : "Sign in"}
       </Btn>
 

@@ -1181,6 +1181,12 @@ export function FocusClient({
       <div className="absolute bottom-0 left-0 right-0 bg-panel/95 backdrop-blur-sm border-t border-rule px-4 md:px-6 py-3 z-20">
         <div className="flex flex-wrap items-center gap-2">
           <span className="section-label mr-1 mb-0 hidden sm:inline">How did it go?</span>
+          {busy && (
+            <span className="text-xs text-accent inline-flex items-center gap-1.5 mr-1">
+              <span className="btn-spinner inline-block w-3 h-3 border-2 border-accent/25 border-t-accent rounded-full" />
+              Saving…
+            </span>
+          )}
           {outcomes.map((o) => (
             <button
               type="button"
@@ -1188,7 +1194,7 @@ export function FocusClient({
               disabled={busy}
               onClick={() => handleOutcome(o.outcome)}
               className={
-                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-all disabled:opacity-40 " +
+                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-all duration-150 active:scale-[0.97] disabled:opacity-40 " +
                 (o.variant === "go"
                   ? "bg-accent-soft border-accent/40 text-accent"
                   : o.variant === "stop"
@@ -1200,7 +1206,7 @@ export function FocusClient({
               <span className="font-mono text-[10px] opacity-40">{o.key}</span>
             </button>
           ))}
-          <button type="button" onClick={skip} disabled={busy} className="text-xs text-dim hover:text-ink px-3 py-2">
+          <button type="button" onClick={skip} disabled={busy} className="text-xs text-dim hover:text-ink px-3 py-2 active:scale-[0.97]">
             Skip · S
           </button>
           {channel === "call" && (

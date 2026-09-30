@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { type NextAuthOptions, getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { redirect } from "next/navigation";
@@ -81,8 +82,9 @@ export type CurrentUser = NonNullable<Awaited<ReturnType<typeof prisma.user.find
  * Always re-reads the user row rather than trusting JWT claims, so a role
  * change or deactivation from /admin takes effect on the user's very next
  * request instead of waiting for their session to expire.
+ * Cached per React request so layout + page don't each hit the DB twice.
  */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const session = await getAuthSession();
   if (!session?.user?.email) return null;
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
@@ -91,7 +93,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     return null;
   }
   return user;
-}
+});
 
 export async function requireUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
