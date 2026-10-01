@@ -10,7 +10,7 @@ export function ImpersonationBanner({ name }: { name: string }) {
   return (
     <div className="bg-warm text-on-accent px-4 py-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm relative z-[250]">
       <span>
-        You're in <span className="font-semibold">{name}</span>'s account.
+        Viewing <span className="font-semibold">{name}</span>&apos;s account.
       </span>
       <button
         type="button"
