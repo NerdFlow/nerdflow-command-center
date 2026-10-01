@@ -6,6 +6,7 @@ import Papa from "papaparse";
 import { Btn, Chip, SectionLabel } from "@/components/ui";
 import { previewLeadImport, commitBulkImport } from "@/server/actions/leads";
 import { ColumnMapper, autoMapFields, applyMapping, type FieldMapping } from "@/components/ColumnMapper";
+import { defaultAssigneeIds } from "@/lib/importMap";
 import { useToast } from "@/components/Toast";
 
 type PreviewResult = Awaited<ReturnType<typeof previewLeadImport>>;
@@ -68,7 +69,7 @@ export function BulkImportWizard({
   const [mapping, setMapping] = useState<FieldMapping>({});
   const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? "");
   const [assignMode, setAssignMode] = useState<"single" | "split">("single");
-  const [selectedReps, setSelectedReps] = useState<string[]>([currentUserId]);
+  const [selectedReps, setSelectedReps] = useState<string[]>(() => defaultAssigneeIds(currentUserId, reps.map((r) => r.id)));
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [missingContact, setMissingContact] = useState(0);
   const [working, setWorking] = useState(false);
@@ -78,6 +79,15 @@ export function BulkImportWizard({
   const selectedCampaign = campaigns.find((c) => c.id === campaignId);
   const multiRep = reps.length > 1;
   const activeIdx = stepIndex(step);
+
+  function focusDestination() {
+    const ids = multiRep ? selectedReps : [currentUserId];
+    if (multiRep && assignMode === "split" && ids.length > 1) return `split across ${ids.length} Focus queues`;
+    const id = ids[0];
+    const name = reps.find((r) => r.id === id)?.fullName;
+    if (!name || id === currentUserId) return "your Focus queue";
+    return `${name}'s Focus queue`;
+  }
 
   function afterFileParsed(cols: string[], data: Record<string, string>[]) {
     setHeaders(cols);
@@ -187,7 +197,7 @@ export function BulkImportWizard({
     setPreview(null);
     setResult(null);
     setError(null);
-    setSelectedReps([currentUserId]);
+    setSelectedReps(defaultAssigneeIds(currentUserId, reps.map((r) => r.id)));
     setAssignMode("single");
     if (fileInput.current) fileInput.current.value = "";
   }
@@ -295,7 +305,9 @@ export function BulkImportWizard({
             </div>
           )}
 
-          <p className="text-xs text-dim m-0">Leads go straight into Focus — no review inbox.</p>
+          <p className="text-xs text-dim m-0">
+            Leads go straight into {focusDestination()}. Call includes every lead with a phone.
+          </p>
 
           <Btn variant="primary" size="lg" loading={working} onClick={continueFromCampaign}>
             {working ? "Checking…" : mappingLooksComplete(mapping) ? "Preview" : "Next: map columns"}
@@ -333,21 +345,17 @@ export function BulkImportWizard({
           </div>
           <p className="text-sm text-muted m-0">
             Into <span className="text-ink font-medium">{selectedCampaign?.name}</span>
-            {multiRep
-              ? ` · ${
-                  assignMode === "single"
-                    ? reps.find((r) => r.id === selectedReps[0])?.fullName
-                    : `${selectedReps.length} reps, split evenly`
-                }`
-              : ""}
-            . Ready in Focus after import.
+            {" · "}
+            <span className="text-ink font-medium">{focusDestination()}</span>
+            .{" "}
+            {preview.rows.filter((r) => !r.isDuplicate && r.row.phone).length} with a phone will show under Call the same day.
           </p>
           <div className="max-h-64 overflow-y-auto border border-rule rounded-xl">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-panel2 text-dim text-xs uppercase tracking-wide">
                   <th className="text-left font-semibold p-3">Business</th>
-                  <th className="text-left font-semibold p-3">Contact</th>
+                  <th className="text-left font-semibold p-3">Phone</th>
                   <th className="text-left font-semibold p-3">Status</th>
                 </tr>
               </thead>
@@ -355,7 +363,7 @@ export function BulkImportWizard({
                 {preview.rows.slice(0, 50).map((r, i) => (
                   <tr key={i} className="border-t border-rule">
                     <td className="p-3">{r.row.business_name}</td>
-                    <td className="p-3 text-muted">{r.row.contact_name ?? "—"}</td>
+                    <td className="p-3 text-muted">{r.row.phone ?? "—"}</td>
                     <td className="p-3">
                       {r.isDuplicate ? <Chip tone="cold">Duplicate</Chip> : <Chip tone="go">New</Chip>}
                     </td>

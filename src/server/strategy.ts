@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { callClaudeJSON, AiUnavailableError, estimatePreCallCostUsd } from "@/server/ai/client";
 import { SYSTEM_PROMPT, buildUserPrompt, PROMPT_VERSION } from "@/server/ai/prompts/campaign-strategy";
+import { autoDetailingStarter, isAutoDetailingText, isRestaurantText } from "@/lib/playbooks/autoDetailing";
 import { getOrgSettings } from "@/server/settings";
 
 export const channelSchema = z.enum(["email", "call", "instagram", "linkedin"]);
@@ -28,8 +29,13 @@ export const campaignStrategySchema = z.object({
     score_boost: z.array(z.string()),
   }),
   kill_rule: z.string(),
-  /** Two call openers typed by a person — A/B data collection, no AI. */
+  /** Two call openers. Focus assigns A or B; the rep does not pick. */
   call_scripts: z
+    .tuple([z.string(), z.string()])
+    .optional()
+    .transform((v): [string, string] => (v ?? ["", ""]) as [string, string]),
+  /** Two email openers, separate from the call scripts. */
+  email_scripts: z
     .tuple([z.string(), z.string()])
     .optional()
     .transform((v): [string, string] => (v ?? ["", ""]) as [string, string]),
@@ -43,6 +49,12 @@ function fillPlaceholders(template: string, values: Record<string, string>) {
 
 export function getCallScripts(strategy: CampaignStrategy | null | undefined): [string, string] {
   const scripts = strategy?.call_scripts;
+  if (Array.isArray(scripts) && scripts.length >= 2) return [scripts[0] ?? "", scripts[1] ?? ""];
+  return ["", ""];
+}
+
+export function getEmailScripts(strategy: CampaignStrategy | null | undefined): [string, string] {
+  const scripts = strategy?.email_scripts;
   if (Array.isArray(scripts) && scripts.length >= 2) return [scripts[0] ?? "", scripts[1] ?? ""];
   return ["", ""];
 }
@@ -78,6 +90,15 @@ export function fallbackStrategy(input: {
   buyerGuess?: string;
   goal?: string;
 }): CampaignStrategy {
+  const detailingHint = `${input.productName} ${input.productSummary} ${input.buyerGuess ?? ""} ${input.goal ?? ""}`;
+  if (isAutoDetailingText(detailingHint) && !isRestaurantText(detailingHint)) {
+    return autoDetailingStarter({
+      productName: input.productName,
+      location: input.location,
+      buyerGuess: input.buyerGuess,
+    });
+  }
+
   const loc = input.location || "your target area";
   const buyer = input.buyerGuess || (input.productType === "service" ? "The owner or operations lead" : "The person who owns this problem day to day");
 
@@ -136,6 +157,7 @@ export function fallbackStrategy(input: {
     },
     kill_rule: "Pause at 150 touches if reply rate is under 1% or bounce rate is over 5%.",
     call_scripts: ["", ""],
+    email_scripts: ["", ""],
   };
 }
 
@@ -203,11 +225,28 @@ export async function generateCampaignStrategy(
     });
     // Belt-and-suspenders: force the approved ICP through exactly as approved,
     // regardless of what the model actually did with it.
-    const finalStrategy: CampaignStrategy = {
+    let finalStrategy: CampaignStrategy = {
       ...strategy,
       call_scripts: strategy.call_scripts ?? ["", ""],
+      email_scripts: strategy.email_scripts ?? ["", ""],
       ...(input.approvedIcp ? { icp: input.approvedIcp } : {}),
     };
+    const detailingHint = `${input.productName} ${input.productSummary} ${input.buyerGuess ?? ""}`;
+    if (isAutoDetailingText(detailingHint)) {
+      const blob = `${finalStrategy.call_scripts.join(" ")} ${finalStrategy.email_scripts.join(" ")} ${finalStrategy.messages.call?.first ?? ""} ${finalStrategy.icp.business}`;
+      if (/\b(receptai|dinner rush|restaurants?)\b/i.test(blob) || isRestaurantText(finalStrategy.icp.business)) {
+        finalStrategy = {
+          ...finalStrategy,
+          ...autoDetailingStarter({
+            productName: input.productName,
+            location: input.location ?? finalStrategy.icp.location,
+            buyerGuess: input.approvedIcp?.buyer ?? input.buyerGuess,
+          }),
+          channels: finalStrategy.channels,
+          cadence: finalStrategy.cadence,
+        };
+      }
+    }
     return { strategy: finalStrategy, source: "ai", promptVersion: PROMPT_VERSION };
   } catch (err) {
     const reason = err instanceof AiUnavailableError ? err.message : "unexpected error generating strategy";

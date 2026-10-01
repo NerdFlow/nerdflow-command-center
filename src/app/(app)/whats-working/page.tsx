@@ -2,6 +2,7 @@ import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { Panel, Chip } from "@/components/ui";
 import { getCallScripts, type CampaignStrategy } from "@/server/strategy";
+import { startOfIsoWeek, weeklyScriptComparison } from "@/lib/focusScripts";
 import type { ObjectionResponseStatus, Channel } from "@prisma/client";
 
 const STATUS_TONE: Record<ObjectionResponseStatus, "go" | "acc" | "default" | "stop"> = {
@@ -31,7 +32,8 @@ export default async function WhatsWorkingPage() {
     ...(isRep ? { userId: user.id } : {}),
   };
 
-  const [objections, touches, scriptTouches, campaigns] = await Promise.all([
+  const weekStart = startOfIsoWeek(new Date());
+  const [objections, touches, scriptTouches, weekTouches, campaigns] = await Promise.all([
     prisma.objectionResponse.findMany({
       where: { organizationId: user.organizationId, uses: { gt: 0 } },
       include: { campaign: { select: { name: true } } },
@@ -63,6 +65,20 @@ export default async function WhatsWorkingPage() {
       },
       orderBy: { occurredAt: "desc" },
       take: 300,
+    }),
+    prisma.touch.findMany({
+      where: {
+        ...touchScope,
+        occurredAt: { gte: weekStart },
+        channel: { in: ["call", "email"] },
+      },
+      select: {
+        channel: true,
+        outcome: true,
+        scriptUsed: true,
+        scriptId: true,
+        occurredAt: true,
+      },
     }),
     prisma.campaign.findMany({
       where: { organizationId: user.organizationId, status: { not: "archived" } },
@@ -115,14 +131,17 @@ export default async function WhatsWorkingPage() {
     const row = ensureCampaign(t.lead.campaignId, t.lead.campaign.name, t.lead.campaign.strategy);
     const bucket = t.scriptUsed === "b" ? row.b : row.a;
     bucket.used += 1;
-    if (t.scriptRating === "up") bucket.up += 1;
-    if (t.scriptRating === "down") bucket.down += 1;
+    if (t.scriptRating === "up" || t.scriptRating === "helpful") bucket.up += 1;
+    if (t.scriptRating === "down" || t.scriptRating === "bad") bucket.down += 1;
     if (t.callerNote?.trim() && bucket.notes.length < 8) {
       bucket.notes.push({ text: t.callerNote.trim(), at: t.occurredAt, businessName: t.lead.businessName });
     }
   }
 
   const scriptStats = Array.from(byCampaign.values()).filter((c) => c.a.used + c.b.used > 0 || c.scriptAText || c.scriptBText);
+  const weekRows = weeklyScriptComparison(weekTouches, new Date());
+  const weekHasData = weekRows.some((row) => row.touches > 0);
+  const channelLabel: Record<"call" | "email", string> = { call: "Call", email: "Email" };
 
   return (
     <div>
@@ -133,11 +152,44 @@ export default async function WhatsWorkingPage() {
       </p>
 
       <Panel className="mb-6">
+        <h2 className="text-[17px] font-medium mb-1">This week · A vs B</h2>
+        <p className="text-xs text-muted mb-3 m-0">
+          Interested, meetings, and replies per 100 touches. Focus assigns the script. Week starts Monday.
+        </p>
+        {!weekHasData ? (
+          <p className="text-sm text-muted m-0">No scripted call or email touches this week yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-muted">
+                <th className="text-left font-medium py-1">Channel</th>
+                <th className="text-left font-medium py-1">Script</th>
+                <th className="text-left font-medium py-1">Touches</th>
+                <th className="text-left font-medium py-1">Positive</th>
+                <th className="text-left font-medium py-1">Per 100</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weekRows.map((row) => (
+                <tr key={`${row.channel}-${row.variant}`} className="border-t border-rule">
+                  <td className="py-1.5">{channelLabel[row.channel]}</td>
+                  <td className="py-1.5">{row.variant.toUpperCase()}</td>
+                  <td className="py-1.5">{row.touches}</td>
+                  <td className="py-1.5">{row.positive}</td>
+                  <td className="py-1.5">{row.per100 === null ? "—" : row.per100}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+
+      <Panel className="mb-6">
         <h2 className="text-[17px] font-medium mb-3">Call scripts{isRep ? " (yours)" : ""}</h2>
         {scriptStats.length === 0 ? (
           <p className="text-sm text-muted m-0">
-            No script feedback yet. Add Script A and B on a campaign&apos;s Playbook tab, then pick one in Focus and
-            thumbs up or down when you log the call.
+            No script feedback yet. Add call Script A and B on the campaign Scripts tab. Focus assigns one, and you can
+            mark the opener helpful, meh, or bad after the outcome.
           </p>
         ) : (
           <div className="space-y-6">
