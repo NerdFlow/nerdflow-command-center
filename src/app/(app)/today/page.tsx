@@ -2,11 +2,11 @@ import Link from "next/link";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { buildBrief } from "@/server/brief";
-import { getQueueForUser } from "@/server/queue";
 import { computeFlags, STAGE_LABEL } from "@/server/deals";
 import { getOrgSettings } from "@/server/settings";
 import { zonedParts } from "@/server/cadence";
-import { tallyFocusChannels } from "@/lib/focusQueue";
+import { loadFocusBoard } from "@/server/todayBoard";
+import { expandShapeLead, pickerCounts } from "@/lib/todayCards";
 import { Chip, Ring, SectionLabel } from "@/components/ui";
 import { BriefVoiceLine } from "@/components/BriefVoiceLine";
 import { EndOfDayCard } from "@/components/EndOfDayCard";
@@ -40,11 +40,11 @@ export default async function TodayPage() {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
-  const [settings, { lines, pacing }, queue, deals, todayStat, yesterdayTouches, openReplies, oldestOpenReply] =
+  const [settings, { lines, pacing }, board, deals, todayStat, yesterdayTouches, openReplies, oldestOpenReply] =
     await Promise.all([
       getOrgSettings(),
       buildBrief(user),
-      getQueueForUser(user.id, 50),
+      loadFocusBoard(user.id, user.organizationId),
       prisma.deal.findMany({
         where: { ownerId: user.id, stage: { notIn: ["won", "lost"] } },
         include: { people: true, lead: true },
@@ -89,8 +89,29 @@ export default async function TodayPage() {
     .filter((d) => d.flags.length > 0)
     .slice(0, 3);
 
-  const countByChannel = tallyFocusChannels(
-    queue.map((item) => ({ phone: item.lead.phone, cadence: item.channel ?? "email" })),
+  const allowed = ((user.channelsWorked as Channel[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
+  const countByChannel = pickerCounts(
+    board.cards.flatMap((card) =>
+      expandShapeLead(
+        {
+          id: card.lead.id,
+          phone: card.lead.phone,
+          email: card.lead.email,
+          linkedinUrl: card.lead.linkedinUrl,
+          instagramUrl: card.lead.instagramUrl,
+          contactName: card.lead.contactName,
+          cadenceStep: card.lead.cadenceStep,
+          nextChannelOverride: card.lead.nextChannelOverride,
+          signals: card.lead.signals,
+          strategy: card.campaign.strategy,
+          linkedinRequestSent: card.linkedinRequestSent,
+          openReplies: card.openReplies,
+          replyOnly: card.replyOnly,
+          callAllowedNow: true,
+        },
+        allowed,
+      ),
+    ),
   );
 
   const readyChannels = (["call", "email", "instagram", "linkedin"] as Channel[])
