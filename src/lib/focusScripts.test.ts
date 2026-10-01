@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { autoDetailingStarter } from "@/lib/playbooks/autoDetailing";
 import {
   assignScriptVariant,
+  fillFocusTemplate,
+  hasTemplateHole,
+  resolveFocusObjections,
   resolveFocusOpener,
   scriptIdFor,
   startOfIsoWeek,
@@ -81,6 +84,53 @@ describe("opener copy", () => {
       values,
     });
     expect(opener.text).toMatch(/ReceptAI/);
+  });
+});
+
+describe("call template fill", () => {
+  it("does not turn a missing contact into “Hi, is this there?”", () => {
+    const opener = resolveFocusOpener({
+      channel: "call",
+      leadId: "immaculate",
+      productName: "BayBook",
+      strategy: {
+        summary: "Independent auto detailing shops",
+        icp: { business: "Auto detailing shops" },
+        call_scripts: ["Hi, is this {name}? This is {me}.", "Second script {name}"],
+      },
+      values: { name: "", biz: "Immaculate Auto Spa", city: "Milford", me: "Muqeet", product: "BayBook" },
+    });
+    expect(opener.text).not.toMatch(/there/i);
+    expect(opener.text).toContain("the owner");
+    expect(opener.text).toContain("Muqeet");
+    expect(hasTemplateHole(opener.text)).toBe(false);
+  });
+
+  it("injects the contact first name and fills {product} in objections", () => {
+    const values = { name: "Maria Gomez", biz: "Immaculate Auto Spa", city: "Milford", me: "Muqeet", product: "BayBook", role: "Owner" };
+    const text = fillFocusTemplate("Hi, is this {name}? {product} helps {biz}.", values);
+    expect(text).toBe("Hi, is this Maria? BayBook helps Immaculate Auto Spa.");
+    const objections = resolveFocusObjections(
+      {
+        summary: "Independent auto detailing shops",
+        icp: { business: "Auto detailing shops" },
+        objections: [
+          { question: "We already have a tool.", answer: "{product} covers the calls {biz} misses while a car is in the bay." },
+          { question: "Not now.", answer: "Ask {name} when to call back." },
+        ],
+      },
+      "BayBook",
+      values,
+    );
+    expect(objections[0]?.answer).toContain("BayBook");
+    expect(objections[1]?.answer).toContain("Maria");
+    expect(objections.some((item) => hasTemplateHole(item.question) || hasTemplateHole(item.answer))).toBe(false);
+  });
+
+  it("keeps an email greeting of there when no contact is stored", () => {
+    const text = fillFocusTemplate("Hi {name},", { name: "there", biz: "Immaculate Auto Spa", city: "", me: "Muqeet", product: "BayBook" });
+    expect(text).toBe("Hi there,");
+    expect(hasTemplateHole(text)).toBe(false);
   });
 });
 

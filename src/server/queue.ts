@@ -9,6 +9,15 @@ import type { Channel } from "@prisma/client";
 
 const HOT_THRESHOLD = 70;
 
+const queueInclude = {
+  campaign: { include: { product: true } },
+  touches: {
+    orderBy: { occurredAt: "desc" as const },
+    take: 1,
+    select: { channel: true, outcome: true, occurredAt: true },
+  },
+};
+
 /**
  * For email-only (or otherwise channel-restricted) campaigns whose cadence
  * still has a disallowed Day-0 call: move the lead to the first allowed
@@ -93,7 +102,7 @@ export async function getQueueForUser(ownerId: string, limit = 50) {
     prisma.lead.findMany({
       where: { ownerId, status: { in: ["queued", "in_cadence"] }, fitScore: { gte: HOT_THRESHOLD } },
       orderBy: { fitScore: "desc" },
-      include: { campaign: { include: { product: true } } },
+      include: queueInclude,
       take: limit,
     }),
     prisma.lead.findMany({
@@ -104,13 +113,13 @@ export async function getQueueForUser(ownerId: string, limit = 50) {
         nextTouchAt: { lte: now },
       },
       orderBy: [{ cadenceStep: "asc" }, { nextTouchAt: "asc" }],
-      include: { campaign: { include: { product: true } } },
+      include: queueInclude,
       take: limit,
     }),
     prisma.lead.findMany({
       where: { ownerId, status: "queued", fitScore: { lt: HOT_THRESHOLD } },
       orderBy: { createdAt: "asc" },
-      include: { campaign: { include: { product: true } } },
+      include: queueInclude,
       take: limit,
     }),
   ]);

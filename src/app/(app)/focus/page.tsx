@@ -1,5 +1,6 @@
 import { requireUser } from "@/server/auth";
 import { getQueueForUser } from "@/server/queue";
+import { formatLastTouch } from "@/lib/focusCallCard";
 import { FocusClient } from "@/components/FocusClient";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel } from "@prisma/client";
@@ -36,6 +37,7 @@ export default async function FocusPage({ searchParams }: { searchParams: { chan
       fitReasons: (lead.fitReasons as string[] | null) ?? [],
       fitFlags: (lead.fitFlags as string[] | null) ?? [],
       source: lead.source,
+      lastTouchLabel: formatLastTouch(lead.touches[0] ?? null),
     },
     campaign: {
       id: campaign.id,
