@@ -1,12 +1,14 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/server/auth";
+import { getCurrentUser, getSessionActor } from "@/server/auth";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { getActiveTargets } from "@/server/targets";
 import { METRIC_LABEL } from "@/server/targets";
 import { ProfileClient } from "@/components/ProfileClient";
 
 export default async function ProfilePage({ searchParams }: { searchParams: { setup?: string } }) {
-  const user = await getCurrentUser();
+  const [user, actor] = await Promise.all([getCurrentUser(), getSessionActor()]);
   if (!user) redirect("/login");
+  const impersonating = !!actor && actor.id !== user.id;
 
   const isSetup = searchParams.setup === "1" && !user.profileCompletedAt;
   const targets = await getActiveTargets(user.id);
@@ -15,7 +17,9 @@ export default async function ProfilePage({ searchParams }: { searchParams: { se
   const workingHours = user.workingHours as { start: string; end: string; days: number[] };
 
   return (
-    <div className="min-h-screen app-atmosphere flex items-center justify-center px-4 py-10">
+    <div className="min-h-screen app-atmosphere flex flex-col">
+      {impersonating && <ImpersonationBanner name={user.fullName} />}
+      <div className="flex-1 flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-lg animate-fade-up">
         {isSetup && (
           <div className="text-center mb-6">
@@ -48,6 +52,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: { se
           channelsWorked={channelsWorked}
           targets={targets.map((t) => ({ label: METRIC_LABEL[t.metric], value: t.dailyValue }))}
         />
+      </div>
       </div>
     </div>
   );

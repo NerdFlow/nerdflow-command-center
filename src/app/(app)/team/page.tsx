@@ -73,6 +73,7 @@ export default async function TeamPage({ searchParams }: { searchParams: { week?
           lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
           targets: u.targetsOwned.map((t) => ({ id: t.id, metric: t.metric, dailyValue: t.dailyValue, effectiveFrom: t.effectiveFrom.toISOString() })),
         }))}
+        currentUserId={user.id}
       />
 
       <div>

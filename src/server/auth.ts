@@ -1,9 +1,11 @@
 import { cache } from "react";
+import { cookies } from "next/headers";
 import { type NextAuthOptions, getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/server/db";
+import { IMPERSONATION_COOKIE, clearImpersonationCookie, readImpersonationCookie } from "@/server/impersonation";
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
@@ -58,6 +60,7 @@ export const authOptions: NextAuthOptions = {
           entityId: dbUser.id,
         },
       });
+      clearImpersonationCookie();
       return true;
     },
     async jwt({ token, user }) {
@@ -78,21 +81,49 @@ export function getAuthSession() {
 
 export type CurrentUser = NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>;
 
+type SessionContext = {
+  /** The person who actually signed in. */
+  actor: CurrentUser | null;
+  /** Who the app is acting as. Equals actor, unless a manager has opened someone else's account. */
+  user: CurrentUser | null;
+};
+
 /**
  * Always re-reads the user row rather than trusting JWT claims, so a role
- * change or deactivation from /admin takes effect on the user's very next
- * request instead of waiting for their session to expire.
+ * change or deactivation takes effect on the next request.
  * Cached per React request so layout + page don't each hit the DB twice.
  */
-export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+const loadSessionContext = cache(async (): Promise<SessionContext> => {
   const session = await getAuthSession();
-  if (!session?.user?.email) return null;
-  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-  if (!user || user.status === "deactivated") return null;
-  if (user.sessionsInvalidatedAt && session.iat && session.iat * 1000 < user.sessionsInvalidatedAt.getTime()) {
-    return null;
+  if (!session?.user?.email) return { actor: null, user: null };
+
+  const actor = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!actor || actor.status === "deactivated") return { actor: null, user: null };
+  if (actor.sessionsInvalidatedAt && session.iat && session.iat * 1000 < actor.sessionsInvalidatedAt.getTime()) {
+    return { actor: null, user: null };
   }
-  return user;
+
+  const claim = readImpersonationCookie(cookies().get(IMPERSONATION_COOKIE)?.value);
+  if (claim && actor.role === "lead" && claim.actorId === actor.id && claim.targetId !== actor.id) {
+    const target = await prisma.user.findFirst({
+      where: {
+        id: claim.targetId,
+        organizationId: actor.organizationId,
+        status: { not: "deactivated" },
+      },
+    });
+    if (target) return { actor, user: target };
+  }
+
+  return { actor, user: actor };
+});
+
+export const getSessionActor = cache(async (): Promise<CurrentUser | null> => {
+  return (await loadSessionContext()).actor;
+});
+
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
+  return (await loadSessionContext()).user;
 });
 
 export async function requireUser(): Promise<CurrentUser> {

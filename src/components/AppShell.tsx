@@ -8,6 +8,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { FlowPanel } from "@/components/FlowPanel";
 import { BrandMark, BrandWordmark } from "@/components/BrandLogo";
 import { useNavPending } from "@/components/NavigationProgress";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 
 export type ShellExtrasData = {
   dueNowCount: number;
@@ -54,11 +55,13 @@ export function AppShell({
   user,
   navItems,
   extras,
+  impersonating = false,
   children,
 }: {
   user: { fullName: string; email: string; role: string };
   navItems: NavItem[];
   extras?: ReactNode;
+  impersonating?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -102,6 +105,7 @@ export function AppShell({
       <ShellExtrasContext.Provider value={reportExtras}>
         {extras}
         <div className="min-h-screen app-atmosphere flex flex-col">
+        {impersonating && <ImpersonationBanner name={user.fullName} />}
         <div className="flex items-center justify-between px-4 md:px-8 py-3 border-b border-rule bg-panel/80 backdrop-blur-sm">
           <div className="flex items-center gap-2.5 min-w-0">
             <BrandMark className="h-5 w-auto shrink-0" size={20} />
@@ -138,7 +142,9 @@ export function AppShell({
   return (
     <ShellExtrasContext.Provider value={reportExtras}>
       {extras}
-      <div className="grid grid-cols-1 md:grid-cols-[232px_1fr] min-h-screen app-atmosphere">
+      <div className="min-h-screen flex flex-col app-atmosphere">
+      {impersonating && <ImpersonationBanner name={user.fullName} />}
+      <div className="grid grid-cols-1 md:grid-cols-[232px_1fr] flex-1">
       <nav className="border-b md:border-b-0 md:border-r border-rule bg-panel/90 backdrop-blur-sm md:bg-panel sticky top-0 z-20 md:h-screen md:flex md:flex-col">
         <div className="flex md:flex-col gap-1 p-3 md:p-4 overflow-x-auto md:overflow-y-auto md:flex-1">
           <div className="hidden md:block px-1 pb-5 pt-1">
@@ -262,6 +268,7 @@ export function AppShell({
           {children}
         </main>
         <FlowPanel assistantName={assistantName} />
+      </div>
       </div>
       </div>
     </ShellExtrasContext.Provider>

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import { addPerson, changeUserRole, setUserStatus, setTarget } from "@/server/actions/admin";
+import { startImpersonation } from "@/server/actions/impersonate";
 import { METRIC_LABEL } from "@/server/targets";
 import type { Role, TargetMetric, UserStatus } from "@prisma/client";
 
@@ -21,7 +22,7 @@ type TeamUser = {
   targets: { id: string; metric: TargetMetric; dailyValue: number; effectiveFrom: string }[];
 };
 
-export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
+export function TeamPeopleClient({ users, currentUserId }: { users: TeamUser[]; currentUserId: string }) {
   const router = useRouter();
   const toast = useToast();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -184,6 +185,20 @@ export function TeamPeopleClient({ users }: { users: TeamUser[] }) {
                       >
                         {u.status === "deactivated" ? "Reactivate" : "Deactivate"}
                       </button>
+                      {u.id !== currentUserId && u.status !== "deactivated" && (
+                        <button
+                          className="text-xs text-accent font-medium disabled:opacity-40"
+                          disabled={rowBusyId === u.id}
+                          onClick={() =>
+                            runRow(u.id, async () => {
+                              await startImpersonation(u.id);
+                              window.location.href = "/today";
+                            }, "Opening their account…")
+                          }
+                        >
+                          {rowBusyId === u.id ? "Opening…" : "Log in as"}
+                        </button>
+                      )}
                       <button className="text-xs text-muted" onClick={() => setExpanded(expanded === u.id ? null : u.id)}>
                         Targets
                       </button>

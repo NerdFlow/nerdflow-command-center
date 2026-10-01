@@ -1,11 +1,11 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/server/auth";
+import { getCurrentUser, getSessionActor } from "@/server/auth";
 import { AppShell, type NavItem } from "@/components/AppShell";
 import { ShellExtras } from "@/components/ShellExtras";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const user = await getCurrentUser();
+  const [user, actor] = await Promise.all([getCurrentUser(), getSessionActor()]);
   if (!user) redirect("/login");
 
   if (!user.profileCompletedAt) {
@@ -31,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <AppShell
       user={{ fullName: user.fullName, email: user.email, role: user.role }}
       navItems={navItems}
+      impersonating={!!actor && actor.id !== user.id}
       extras={
         <Suspense fallback={null}>
           <ShellExtras userId={user.id} organizationId={user.organizationId} />
