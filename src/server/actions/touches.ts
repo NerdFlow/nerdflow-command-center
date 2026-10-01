@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
+import { z } from "zod";
 import { planNextCadenceStep, scheduleNextTouch, type WorkingHours } from "@/server/cadence";
+import { resolveFocusOpener } from "@/server/focusMode";
 import { incrementDailyCount } from "@/server/targets";
 import { writeAuditLog } from "@/server/audit";
 import type { CampaignStrategy } from "@/server/strategy";
@@ -26,23 +28,33 @@ export async function logTouchOutcome(params: {
   /** Required for outcome "meeting_booked". */
   meetingAt?: string;
   meetingNote?: string;
-  /** Call Focus: which script the rep said ("a" | "b"). Optional — never blocks the outcome. */
-  scriptUsed?: "a" | "b";
-  /** Call Focus: thumbs on that script. */
-  scriptRating?: "up" | "down";
-  /** Call Focus: what the caller said, in the rep's words. */
+  /** Optional note. The script itself is assigned by the server, not chosen here. */
   callerNote?: string;
 }) {
   const user = await requireUser();
   const leadOrNull = await prisma.lead.findFirst({
     where: { id: params.leadId, organizationId: user.organizationId },
-    include: { campaign: true, owner: true },
+    include: { campaign: { include: { product: true } }, owner: true },
   });
   if (!leadOrNull) throw new Error("Lead not found");
   const lead = leadOrNull;
 
   const now = new Date();
   const step = lead.cadenceStep;
+  const opener = resolveFocusOpener({
+    leadId: lead.id,
+    channel: params.channel,
+    strategy: lead.campaign.strategy as unknown as CampaignStrategy,
+    cadenceStep: step,
+    values: {
+      name: firstName(lead.contactName),
+      biz: lead.businessName,
+      city: lead.city ?? "",
+      me: user.fullName,
+      product: lead.campaign.product.name,
+    },
+  });
+  const scriptVariant = opener.variant === "a" || opener.variant === "b" ? opener.variant : null;
 
   // Applies the status/stage change for this outcome. Independent of the
   // touch record and audit log below, so it runs in the same parallel batch
@@ -120,7 +132,7 @@ export async function logTouchOutcome(params: {
     return null;
   }
 
-  const [, , dealId] = await Promise.all([
+  const [touch, , dealId] = await Promise.all([
     prisma.touch.create({
       data: {
         organizationId: user.organizationId,
@@ -130,13 +142,9 @@ export async function logTouchOutcome(params: {
         step,
         outcome: params.outcome,
         occurredAt: now,
-        ...(params.channel === "call"
-          ? {
-              scriptUsed: params.scriptUsed ?? null,
-              scriptRating: params.scriptRating ?? null,
-              callerNote: params.callerNote?.trim() || null,
-            }
-          : {}),
+        scriptId: opener.scriptId,
+        scriptUsed: scriptVariant,
+        callerNote: params.callerNote?.trim() || null,
       },
     }),
     incrementDailyCount(user.id, user.organizationId, params.channel),
@@ -150,9 +158,7 @@ export async function logTouchOutcome(params: {
       after: {
         channel: params.channel,
         outcome: params.outcome,
-        ...(params.channel === "call" && params.scriptUsed
-          ? { scriptUsed: params.scriptUsed, scriptRating: params.scriptRating ?? null }
-          : {}),
+        scriptId: opener.scriptId,
       },
     }),
   ]);
@@ -178,5 +184,25 @@ export async function logTouchOutcome(params: {
   revalidatePath("/deals");
   revalidatePath("/whats-working");
 
-  return { dealId };
+  return { dealId, touchId: touch.id };
+}
+
+const scriptRatingSchema = z.enum(["helpful", "meh", "bad"]);
+
+/** Optional, skippable rating after an outcome. Does not change the lead. */
+export async function rateTouchScript(touchId: string, rating: "helpful" | "meh" | "bad") {
+  const user = await requireUser();
+  const parsed = scriptRatingSchema.parse(rating);
+  const touch = await prisma.touch.findFirst({
+    where: { id: touchId, organizationId: user.organizationId, userId: user.id },
+    select: { id: true },
+  });
+  if (!touch) throw new Error("Touch not found");
+  await prisma.touch.update({ where: { id: touch.id }, data: { scriptRating: parsed } });
+  revalidatePath("/whats-working");
+}
+
+function firstName(contactName: string | null): string {
+  if (!contactName) return "there";
+  return contactName.trim().split(/\s+/)[0] ?? "there";
 }

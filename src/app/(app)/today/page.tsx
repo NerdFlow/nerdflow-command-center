@@ -3,18 +3,17 @@ import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { buildBrief } from "@/server/brief";
 import { getQueueForUser } from "@/server/queue";
+import { FOCUS_MODES, countFocusModes, type FocusMode } from "@/server/focusMode";
 import { computeFlags, STAGE_LABEL } from "@/server/deals";
 import { getOrgSettings } from "@/server/settings";
 import { zonedParts } from "@/server/cadence";
 import { Chip, Ring, SectionLabel } from "@/components/ui";
 import { BriefVoiceLine } from "@/components/BriefVoiceLine";
 import { EndOfDayCard } from "@/components/EndOfDayCard";
-import type { Channel } from "@prisma/client";
 
-const CHANNEL_LABEL: Record<Channel, string> = {
+const CHANNEL_LABEL: Record<FocusMode, string> = {
   call: "Call",
   email: "Email",
-  instagram: "Instagram",
   linkedin: "LinkedIn",
 };
 
@@ -88,15 +87,12 @@ export default async function TodayPage() {
     .filter((d) => d.flags.length > 0)
     .slice(0, 3);
 
-  const countByChannel: Partial<Record<Channel, number>> = {};
-  for (const item of queue) {
-    const ch: Channel = item.channel ?? "email";
-    countByChannel[ch] = (countByChannel[ch] ?? 0) + 1;
-  }
-
-  const readyChannels = (["call", "email", "instagram", "linkedin"] as Channel[])
-    .map((ch) => ({ ch, count: countByChannel[ch] ?? 0 }))
-    .filter((c) => c.count > 0);
+  const allowedModes = (user.channelsWorked as string[] | null) ?? [...FOCUS_MODES];
+  const countByMode = countFocusModes(
+    queue.map((item) => item.lead),
+    allowedModes,
+  );
+  const readyChannels = FOCUS_MODES.map((ch) => ({ ch, count: countByMode[ch] })).filter((c) => c.count > 0);
   const topChannel = readyChannels.sort((a, b) => b.count - a.count)[0];
 
   const nowLocal = zonedParts(new Date(), user.timezone);

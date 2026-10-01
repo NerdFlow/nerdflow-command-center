@@ -605,9 +605,11 @@ model Touch {
   outcome        TouchOutcome
   reason         String?       @db.Text
   body           String?       @db.Text
-  /// Which call script the rep used: "a" or "b". Null if they didn't pick one.
+  /// Legacy variant letter ("a" or "b") mirrored from script_id for older reads.
   scriptUsed     String?       @map("script_used")
-  /// Rep's thumbs on that script: "up" or "down".
+  /// System-assigned script, e.g. "call:a" or "email:b". Set on every touch. Reps do not pick.
+  scriptId       String?       @map("script_id")
+  /// Optional opener rating after the outcome: "helpful", "meh", or "bad".
   scriptRating   String?       @map("script_rating")
   /// What the caller said, in the rep's words.
   callerNote     String?       @map("caller_note") @db.Text

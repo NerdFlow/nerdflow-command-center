@@ -2,14 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Chip } from "@/components/ui";
-import { logTouchOutcome } from "@/server/actions/touches";
-import { getObjectionResponses, recordObjectionFeedback, getLiveObjectionResponse } from "@/server/actions/objections";
-import { rewriteEmailDraft } from "@/server/actions/rewrite";
-import { renderMessage, getCallScripts, renderScriptTemplate, type CampaignStrategy } from "@/server/strategy";
+import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
+import { joinEmailDraft } from "@/server/cadence";
+import {
+  FOCUS_MODES,
+  isFocusMode,
+  leadEligibleForFocusMode,
+  linkedInOpenUrl,
+  resolveFocusOpener,
+  type FocusMode,
+} from "@/server/focusMode";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
-import { joinEmailDraft, resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
-import { humanizeTag } from "@/lib/text";
+import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel, TouchOutcome, LeadSource } from "@prisma/client";
 
 type Card = {
@@ -39,11 +43,10 @@ type Card = {
   label: string;
 };
 
-const CHANNEL_LABEL: Record<Channel, string> = {
-  email: "Email",
+const MODE_LABEL: Record<FocusMode, string> = {
   call: "Call",
-  instagram: "Instagram DM",
-  linkedin: "LinkedIn DM",
+  email: "Email",
+  linkedin: "LinkedIn",
 };
 
 const SOURCE_LABEL: Partial<Record<LeadSource, string>> = {
@@ -69,31 +72,20 @@ const CALL_OUTCOMES: OutcomeDef[] = [
   { outcome: "wrong_number", label: "Wrong number", key: "7", variant: "stop" },
 ];
 
-/** Email / DM outcomes per product doc: Sent · Can't send · Skip. Replies live on Replies. */
-const EMAIL_OUTCOMES: OutcomeDef[] = [
+const MESSAGE_OUTCOMES: OutcomeDef[] = [
   { outcome: "sent", label: "Sent", key: "1", variant: "go" },
-  { outcome: "wrong_number", label: "Can't send / no access", key: "2", variant: "stop" },
+  { outcome: "wrong_number", label: "Can't send", key: "2", variant: "stop" },
 ];
 
-const DM_OUTCOMES: OutcomeDef[] = [
-  { outcome: "sent", label: "Sent", key: "1", variant: "go" },
-  { outcome: "wrong_number", label: "Can't send / no access", key: "2", variant: "stop" },
+const SESSION_LENGTHS: { label: string; seconds: number | null }[] = [
+  { label: "30 min", seconds: 1800 },
+  { label: "1 hr", seconds: 3600 },
+  { label: "2 hr", seconds: 7200 },
+  { label: "Until empty", seconds: null },
 ];
 
-function outcomesFor(channel: Channel): OutcomeDef[] {
-  if (channel === "call") return CALL_OUTCOMES;
-  if (channel === "email") return EMAIL_OUTCOMES;
-  return DM_OUTCOMES;
-}
-
-const FOLLOW_UP_ELIGIBLE: TouchOutcome[] = ["no_answer", "voicemail", "talked_not_now", "sent"];
-
-function cardChannel(card: Card): Channel {
-  return resolveLeadChannel({
-    strategy: card.campaign.strategy,
-    cadenceStep: card.lead.cadenceStep,
-    nextChannelOverride: card.lead.nextChannelOverride,
-  });
+function outcomesFor(mode: FocusMode): OutcomeDef[] {
+  return mode === "call" ? CALL_OUTCOMES : MESSAGE_OUTCOMES;
 }
 
 function firstNameOf(contactName: string | null): string {
@@ -106,20 +98,10 @@ function gmailComposeUrl(to: string, subject: string, body: string) {
   return `https://mail.google.com/mail/?${params.toString()}`;
 }
 
-const CHANNEL_FILTERS: Channel[] = ["call", "email", "instagram", "linkedin"];
-
-const SESSION_LENGTHS: { label: string; seconds: number | null }[] = [
-  { label: "30 min", seconds: 1800 },
-  { label: "1 hr", seconds: 3600 },
-  { label: "2 hr", seconds: 7200 },
-  { label: "Until empty", seconds: null },
-];
-
-const EMAIL_REWRITE_STYLES = [
-  { style: "shorter" as const, label: "Shorter" },
-  { style: "more_casual" as const, label: "More casual" },
-  { style: "different_angle" as const, label: "Different angle" },
-];
+function askForLabel(contactName: string | null): string {
+  const name = contactName?.trim();
+  return name || "the owner";
+}
 
 export function FocusClient({
   initialCards,
@@ -135,243 +117,113 @@ export function FocusClient({
   initialChannel?: Channel | "all";
 }) {
   const router = useRouter();
-  // Reps only work the channels assigned to them (Settings/Profile "channels worked") -
-  // a lead whose next touch is on a channel this rep doesn't work never enters their queue.
-  const [cards, setCards] = useState(() => initialCards.filter((c) => allowedChannels.includes(cardChannel(c))));
-  const [channelFilter, setChannelFilter] = useState<Channel | "all">(() => {
-    if (initialChannel && initialChannel !== "all" && allowedChannels.includes(initialChannel)) return initialChannel;
-    if (initialChannel === "all") return "all";
-    return "all";
+  const modes = FOCUS_MODES.filter((mode) => allowedChannels.includes(mode));
+  const [cards, setCards] = useState(initialCards);
+  const [channelFilter, setChannelFilter] = useState<FocusMode>(() => {
+    if (isFocusMode(initialChannel) && allowedChannels.includes(initialChannel)) return initialChannel;
+    return modes[0] ?? "call";
   });
   const [sourceFilter, setSourceFilter] = useState<LeadSource | "all">("all");
-  const [draft, setDraft] = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailBody, setEmailBody] = useState("");
-  const [rewriteBusy, setRewriteBusy] = useState(false);
-  const [rewriteNote, setRewriteNote] = useState<string | null>(null);
-  const [askFlow, setAskFlow] = useState("");
-  const [pastedOutcome, setPastedOutcome] = useState<TouchOutcome | null>(null);
-  const [pastedMessage, setPastedMessage] = useState("");
-  const [meetingAt, setMeetingAt] = useState("");
-  const [meetingNote, setMeetingNote] = useState("");
-  const [followUpChannel, setFollowUpChannel] = useState<Channel | null>(null);
-  const [notes, setNotes] = useState("");
-  const [scriptUsed, setScriptUsed] = useState<"a" | "b" | null>(null);
-  const [scriptRating, setScriptRating] = useState<"up" | "down" | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [objections, setObjections] = useState<Awaited<ReturnType<typeof getObjectionResponses>>>([]);
-  const [activeObjectionId, setActiveObjectionId] = useState<string | null>(null);
-  const [objectionFeedback, setObjectionFeedback] = useState<Record<string, "kept_talking" | "lost">>({});
-  const [theySaid, setTheySaid] = useState("");
-  const [coachingBusy, setCoachingBusy] = useState(false);
-  const [coachingResponse, setCoachingResponse] = useState<{ response: string; source: "ai" | "fallback" } | null>(null);
-
-  // Session setup gate — matches the product doc's "pick a channel + length, then go full-screen" flow.
   const [started, setStarted] = useState(false);
   const [sessionLengthSeconds, setSessionLengthSeconds] = useState<number | null>(3600);
   const [secondsLeft, setSecondsLeft] = useState(3600);
   const [touchesLogged, setTouchesLogged] = useState(0);
   const [conversations, setConversations] = useState(0);
   const [sessionTotal, setSessionTotal] = useState(0);
-  // Off by default — calls are allowed anytime; this is an opt-in filter for
-  // reps who specifically want to only see leads in their local business hours.
   const [businessHoursOnly, setBusinessHoursOnly] = useState(false);
+  const [pendingRating, setPendingRating] = useState<{ touchId: string; businessName: string } | null>(null);
 
-  const countByChannel = useMemo(() => {
-    const counts: Partial<Record<Channel, number>> = {};
-    for (const c of cards) {
-      const ch = cardChannel(c);
-      counts[ch] = (counts[ch] ?? 0) + 1;
+  function inMode(card: Card, mode: FocusMode): boolean {
+    if (sourceFilter !== "all" && card.lead.source !== sourceFilter) return false;
+    if (!leadEligibleForFocusMode(card.lead, mode)) return false;
+    if (mode === "call" && businessHoursOnly) {
+      return leadLocalTimeStatus(card.lead, repTimezone).inBusinessHours;
     }
-    return counts;
-  }, [cards]);
+    return true;
+  }
 
-  const callable = useMemo(() => {
-    if (!businessHoursOnly) return cards;
-    return cards.filter((c) => {
-      if (cardChannel(c) !== "call") return true;
-      return leadLocalTimeStatus(c.lead, repTimezone).inBusinessHours;
-    });
-  }, [cards, repTimezone, businessHoursOnly]);
+  const counts = useMemo(() => {
+    const out: Record<FocusMode, number> = { call: 0, email: 0, linkedin: 0 };
+    for (const mode of modes) {
+      out[mode] = cards.filter((card) => inMode(card, mode)).length;
+    }
+    return out;
+    // inMode closes over sourceFilter, businessHoursOnly, and repTimezone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards, modes, sourceFilter, businessHoursOnly, repTimezone]);
 
-  const visibleCards = useMemo(() => {
-    let pool = channelFilter === "all" ? callable : callable.filter((c) => cardChannel(c) === channelFilter);
-    if (sourceFilter !== "all") pool = pool.filter((c) => c.lead.source === sourceFilter);
-    return pool;
-  }, [callable, channelFilter, sourceFilter]);
+  const visibleCards = useMemo(
+    () => cards.filter((card) => inMode(card, channelFilter)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone],
+  );
 
   const sourcesPresent = useMemo(() => {
     const set = new Set<LeadSource>();
-    for (const c of cards) set.add(c.lead.source);
+    for (const card of cards) set.add(card.lead.source);
     return Array.from(set);
   }, [cards]);
 
   const current = visibleCards[0];
-  const outOfHoursCallCount = cards.length - callable.length;
+  const mode: FocusMode = channelFilter;
+  const outcomes = useMemo(() => outcomesFor(mode), [mode]);
 
-  const channel: Channel = current ? cardChannel(current) : "email";
-  const step = useMemo(() => {
-    if (!current) return undefined;
-    const cadence = current.campaign.strategy?.cadence ?? [];
-    return (
-      cadence.find((s, i) => i >= current.lead.cadenceStep && s.channel === channel) ??
-      cadence.find((s) => s.channel === channel) ??
-      cadence[current.lead.cadenceStep]
-    );
-  }, [current, channel]);
-  const outcomes = useMemo(() => outcomesFor(channel), [channel]);
-  const localTime = current ? leadLocalTimeStatus(current.lead, repTimezone) : null;
-  const isEmail = channel === "email";
-  const isCall = channel === "call";
-  const callScripts = useMemo(() => getCallScripts(current?.campaign.strategy), [current?.campaign.strategy]);
-  const scriptValues = useMemo(() => {
-    if (!current) return { name: "there", biz: "", city: "", me, product: "" };
-    return {
-      name: firstNameOf(current.lead.contactName),
-      biz: current.lead.businessName,
-      city: current.lead.city || "",
-      me,
-      product: current.campaign.productName,
-    };
-  }, [current, me]);
-  const renderedCallScripts = useMemo(
-    (): [string, string] => [
-      callScripts[0] ? renderScriptTemplate(callScripts[0], scriptValues) : "",
-      callScripts[1] ? renderScriptTemplate(callScripts[1], scriptValues) : "",
-    ],
-    [callScripts, scriptValues],
-  );
-
-  useEffect(() => {
-    if (!current) return;
-    const variant = current.lead.cadenceStep === 0 ? "first" : "follow";
-    const text = renderMessage(current.campaign.strategy, channel, variant, {
-      name: firstNameOf(current.lead.contactName),
-      biz: current.lead.businessName,
-      city: current.lead.city || "",
-      me,
-      product: current.campaign.productName,
+  const opener = useMemo(() => {
+    if (!current) return null;
+    return resolveFocusOpener({
+      leadId: current.lead.id,
+      channel: mode,
+      strategy: current.campaign.strategy,
+      cadenceStep: current.lead.cadenceStep,
+      values: {
+        name: firstNameOf(current.lead.contactName),
+        biz: current.lead.businessName,
+        city: current.lead.city || "",
+        me,
+        product: current.campaign.productName,
+      },
     });
-    setDraft(text);
-    if (channel === "email") {
-      const parts = splitEmailDraft(text);
-      setEmailSubject(parts.subject || `Quick note about ${current.lead.businessName}`);
-      setEmailBody(parts.body || text);
-    } else {
-      setEmailSubject("");
-      setEmailBody("");
-    }
-    setRewriteNote(null);
-    setAskFlow("");
-    setFollowUpChannel(null);
-    setMeetingAt("");
-    setMeetingNote("");
-    setNotes("");
-    setScriptUsed(null);
-    setScriptRating(null);
-    setObjectionFeedback({});
-    setActiveObjectionId(null);
-    setTheySaid("");
-    setCoachingResponse(null);
-  }, [current, channel, me]);
+  }, [current, mode, me]);
 
-  function pickCallScript(which: "a" | "b") {
-    setScriptUsed(which);
-    const text = which === "a" ? renderedCallScripts[0] : renderedCallScripts[1];
-    if (text) setDraft(text);
-  }
-
-  async function runEmailRewrite(style: "shorter" | "more_casual" | "different_angle" | "custom") {
-    if (!current || !isEmail) return;
-    setRewriteBusy(true);
-    setRewriteNote(null);
-    try {
-      const result = await rewriteEmailDraft({
-        campaignId: current.campaign.id,
-        leadId: current.lead.id,
-        style,
-        customInstruction: style === "custom" ? askFlow : undefined,
-        subject: emailSubject,
-        body: emailBody,
-      });
-      setEmailSubject(result.subject);
-      setEmailBody(result.body);
-      setDraft(joinEmailDraft(result.subject, result.body));
-      if (result.note) setRewriteNote(result.note);
-      else if (result.source === "fallback") setRewriteNote("AI unavailable — restored the campaign's saved email template.");
-      else setRewriteNote(null);
-    } catch {
-      setRewriteNote("Couldn't rewrite — try again, or use the template as-is.");
-    } finally {
-      setRewriteBusy(false);
-    }
-  }
-  async function getCoaching() {
-    if (!current || !theySaid.trim()) return;
-    setCoachingBusy(true);
-    try {
-      const result = await getLiveObjectionResponse({
-        campaignId: current.campaign.id,
-        leadSaid: theySaid,
-        businessName: current.lead.businessName,
-        contactFirstName: firstNameOf(current.lead.contactName),
-      });
-      setCoachingResponse(result);
-    } catch {
-      setCoachingResponse({ response: "Couldn't reach Flow — try rephrasing or check your connection.", source: "fallback" });
-    } finally {
-      setCoachingBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!current) return;
-    getObjectionResponses(current.campaign.id)
-      .then((rows) => setObjections(rows))
-      .catch(() => setObjections([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.campaign.id]);
+  const objections = (current?.campaign.strategy.objections ?? []).filter((item) => item.question.trim()).slice(0, 2);
 
   useEffect(() => {
     if (!started || sessionLengthSeconds === null) return;
-    const t = setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(timer);
   }, [started, sessionLengthSeconds]);
 
-  async function giveObjectionFeedback(id: string, outcome: "kept_talking" | "lost") {
-    setObjectionFeedback((f) => ({ ...f, [id]: outcome }));
-    try {
-      await recordObjectionFeedback(id, outcome);
-    } catch {
-      setObjectionFeedback((f) => {
-        const next = { ...f };
-        delete next[id];
-        return next;
-      });
-    }
-  }
-
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!started || !current || pastedOutcome) return;
-      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
-      const match = outcomes.find((o) => o.key === e.key);
+    function onKey(event: KeyboardEvent) {
+      if (!started || !current) return;
+      if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
+      const match = outcomes.find((item) => item.key === event.key);
       if (match) void handleOutcome(match.outcome);
-      if (e.key.toLowerCase() === "s") skip();
-      if (e.key.toLowerCase() === "c") copy();
+      if (event.key.toLowerCase() === "s") skip();
+      if (event.key.toLowerCase() === "c" && mode !== "call") copyDraft();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, current, outcomes, pastedOutcome, draft]);
+  }, [started, current, outcomes, mode, opener]);
 
-  function startSession(ch: Channel | "all") {
-    if (ch !== "all") setChannelFilter(ch);
-    let pool = ch === "all" ? callable : callable.filter((c) => cardChannel(c) === ch);
-    if (sourceFilter !== "all") pool = pool.filter((c) => c.lead.source === sourceFilter);
-    setSessionTotal(pool.length);
+  function poolFor(nextMode: FocusMode) {
+    return cards.filter((card) => {
+      if (sourceFilter !== "all" && card.lead.source !== sourceFilter) return false;
+      if (!leadEligibleForFocusMode(card.lead, nextMode)) return false;
+      if (nextMode === "call" && businessHoursOnly) {
+        return leadLocalTimeStatus(card.lead, repTimezone).inBusinessHours;
+      }
+      return true;
+    });
+  }
+
+  function startSession(nextMode: FocusMode) {
+    setChannelFilter(nextMode);
+    setSessionTotal(poolFor(nextMode).length);
     setTouchesLogged(0);
     setConversations(0);
     setSecondsLeft(sessionLengthSeconds ?? 0);
@@ -381,7 +233,7 @@ export function FocusClient({
   function skip() {
     if (!current) return;
     setCards((prev) => {
-      const idx = prev.findIndex((c) => c.lead.id === current.lead.id);
+      const idx = prev.findIndex((card) => card.lead.id === current.lead.id);
       if (idx === -1) return prev;
       const copy = [...prev];
       const [item] = copy.splice(idx, 1);
@@ -390,54 +242,50 @@ export function FocusClient({
     });
   }
 
-  function copy() {
-    const text = isEmail ? joinEmailDraft(emailSubject, emailBody) : draft;
+  function copyDraft() {
+    if (!opener) return;
+    const text = mode === "email" ? joinEmailDraft(opener.subject, opener.body) : opener.body || opener.text;
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
   }
 
-  async function handleOutcome(outcome: TouchOutcome, message?: string) {
+  async function handleOutcome(outcome: TouchOutcome) {
     if (!current) return;
-    if ((outcome === "interested" || outcome === "replied") && message === undefined) {
-      setPastedOutcome(outcome);
-      return;
-    }
-    if (outcome === "meeting_booked" && !meetingAt) {
-      setPastedOutcome(outcome);
-      return;
-    }
+    setPendingRating(null);
     setBusy(true);
     setError(null);
     try {
       const res = await logTouchOutcome({
         leadId: current.lead.id,
-        channel,
+        channel: mode,
         outcome,
-        pastedMessage: message ?? (notes || undefined),
-        followUpChannel: FOLLOW_UP_ELIGIBLE.includes(outcome) && followUpChannel ? followUpChannel : undefined,
-        meetingAt: outcome === "meeting_booked" ? new Date(meetingAt).toISOString() : undefined,
-        meetingNote: outcome === "meeting_booked" ? meetingNote : undefined,
-        scriptUsed: channel === "call" ? scriptUsed ?? undefined : undefined,
-        scriptRating: channel === "call" ? scriptRating ?? undefined : undefined,
-        callerNote: channel === "call" ? notes || theySaid || undefined : undefined,
       });
-      setPastedOutcome(null);
-      setPastedMessage("");
       const doneLeadId = current.lead.id;
-      setCards((prev) => prev.filter((c) => c.lead.id !== doneLeadId));
+      const businessName = current.lead.businessName;
+      setCards((prev) => prev.filter((card) => card.lead.id !== doneLeadId));
       setTouchesLogged((n) => n + 1);
       if (outcome === "replied" || outcome === "interested" || outcome === "meeting_booked") {
         setConversations((n) => n + 1);
       }
-      if ((outcome === "interested" || outcome === "meeting_booked") && res.dealId) {
-        router.refresh();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't log that outcome — try again.");
+      setPendingRating({ touchId: res.touchId, businessName });
+      if (outcome === "interested" || outcome === "meeting_booked") router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't log that outcome — try again.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function rate(rating: "helpful" | "meh" | "bad") {
+    if (!pendingRating) return;
+    const touchId = pendingRating.touchId;
+    setPendingRating(null);
+    try {
+      await rateTouchScript(touchId, rating);
+    } catch {
+      setError("Couldn't save that rating. The outcome is already logged.");
     }
   }
 
@@ -446,56 +294,35 @@ export function FocusClient({
     router.push("/today");
   }
 
-  // ─── Session setup ──────────────────────────────────────────────────────
   if (!started) {
-    const channelTiles: { channel: Channel | "all"; label: string; count: number }[] = (
-      [
-        { channel: "call" as const, label: "Call", count: countByChannel.call ?? 0 },
-        { channel: "email" as const, label: "Email", count: countByChannel.email ?? 0 },
-        { channel: "instagram" as const, label: "Instagram DM", count: countByChannel.instagram ?? 0 },
-        { channel: "linkedin" as const, label: "LinkedIn DM", count: countByChannel.linkedin ?? 0 },
-      ]
-    ).filter((t) => allowedChannels.includes(t.channel));
-    const [setupChannel, setSetupChannel] = [channelFilter, setChannelFilter];
-
     return (
       <div className="flex-1 flex items-center justify-center p-6 md:p-10">
         <div className="w-full max-w-lg space-y-7 animate-fade-up">
           <div>
             <p className="section-label mb-2">Focus</p>
             <h2 className="page-title m-0">Who are you working?</h2>
-            <p className="text-sm text-muted mt-2 mb-0">One lead at a time. Pick a channel, then go.</p>
+            <p className="text-sm text-muted mt-2 mb-0">One lead at a time. You send every message yourself.</p>
           </div>
           <div className="space-y-3">
             <p className="section-label mb-0">Channel</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setSetupChannel("all")}
-                className={
-                  "flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all " +
-                  (setupChannel === "all" ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
-                }
-              >
-                <span>Everything</span>
-                <span className="font-bold text-accent tabular-nums text-lg">{cards.length}</span>
-              </button>
-              {channelTiles.map(({ channel: ch, label, count }) => (
+            <div className="grid grid-cols-3 gap-2">
+              {modes.map((item) => (
                 <button
                   type="button"
-                  key={ch}
-                  onClick={() => setSetupChannel(ch as Channel)}
-                  disabled={count === 0}
+                  key={item}
+                  onClick={() => setChannelFilter(item)}
+                  disabled={counts[item] === 0}
                   className={
-                    "flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all disabled:opacity-40 " +
-                    (setupChannel === ch ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
+                    "flex flex-col items-start px-4 py-3.5 rounded-xl border text-sm font-medium transition-all disabled:opacity-40 " +
+                    (channelFilter === item ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
                   }
                 >
-                  <span>{label}</span>
-                  <span className="font-bold text-accent tabular-nums text-lg">{count}</span>
+                  <span>{MODE_LABEL[item]}</span>
+                  <span className="font-bold text-accent tabular-nums text-lg">{counts[item]}</span>
                 </button>
               ))}
             </div>
+            <p className="text-xs text-dim m-0">Call includes every lead with a phone, whatever step the cadence is on.</p>
           </div>
           <div className="space-y-3">
             <p className="section-label mb-0">How long</p>
@@ -510,7 +337,9 @@ export function FocusClient({
                   }}
                   className={
                     "flex-1 py-2.5 rounded-xl border text-sm font-medium transition-all " +
-                    (sessionLengthSeconds === opt.seconds ? "border-accent bg-accent-soft text-accent" : "border-rule bg-panel text-muted hover:text-ink")
+                    (sessionLengthSeconds === opt.seconds
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-rule bg-panel text-muted hover:text-ink")
                   }
                 >
                   {opt.label}
@@ -518,15 +347,17 @@ export function FocusClient({
               ))}
             </div>
           </div>
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={businessHoursOnly}
-              onChange={(e) => setBusinessHoursOnly(e.target.checked)}
-              className="accent-[var(--accent)]"
-            />
-            <span className="text-sm text-muted">Only call leads in their local business hours</span>
-          </label>
+          {channelFilter === "call" && (
+            <label className="flex items-center gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={businessHoursOnly}
+                onChange={(e) => setBusinessHoursOnly(e.target.checked)}
+                className="accent-[var(--accent)]"
+              />
+              <span className="text-sm text-muted">Only call leads in their local business hours</span>
+            </label>
+          )}
           {sourcesPresent.length > 1 && (
             <div className="space-y-2">
               <p className="section-label mb-0">Lead source</p>
@@ -536,9 +367,9 @@ export function FocusClient({
                 className="w-full text-sm border border-rule rounded-xl px-3 py-2.5 bg-panel"
               >
                 <option value="all">All sources</option>
-                {sourcesPresent.map((s) => (
-                  <option key={s} value={s}>
-                    {SOURCE_LABEL[s] ?? s}
+                {sourcesPresent.map((source) => (
+                  <option key={source} value={source}>
+                    {SOURCE_LABEL[source] ?? source}
                   </option>
                 ))}
               </select>
@@ -547,8 +378,8 @@ export function FocusClient({
           <div className="flex gap-3 pt-1">
             <button
               type="button"
-              onClick={() => startSession(setupChannel)}
-              disabled={(setupChannel === "all" ? cards.length : countByChannel[setupChannel as Channel] ?? 0) === 0}
+              onClick={() => startSession(channelFilter)}
+              disabled={counts[channelFilter] === 0}
               className="flex-1 bg-accent text-on-accent font-semibold py-3.5 rounded-xl hover:bg-accent-hover transition-colors disabled:opacity-40 text-[15px]"
             >
               Start
@@ -568,15 +399,7 @@ export function FocusClient({
 
   const mins = sessionLengthSeconds === null ? null : Math.floor(secondsLeft / 60);
   const secs = sessionLengthSeconds === null ? null : String(secondsLeft % 60).padStart(2, "0");
-
-  const sessionTitle =
-    channelFilter === "all"
-      ? "All channels"
-      : channelFilter === "call"
-        ? "Calls"
-        : channelFilter === "email"
-          ? "Emails"
-          : CHANNEL_LABEL[channelFilter];
+  const sessionTitle = mode === "call" ? "Calls" : mode === "email" ? "Emails" : "LinkedIn";
 
   const topBar = (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0 z-10">
@@ -589,33 +412,22 @@ export function FocusClient({
         )}
       </div>
       <div className="flex items-center gap-3 md:gap-4 flex-wrap">
-        {channelFilter === "call" || channelFilter === "all" ? (
+        {mode === "call" && (
           <label className="hidden sm:flex items-center gap-1.5 cursor-pointer">
-            <input type="checkbox" checked={businessHoursOnly} onChange={(e) => setBusinessHoursOnly(e.target.checked)} className="accent-[var(--accent)]" />
+            <input
+              type="checkbox"
+              checked={businessHoursOnly}
+              onChange={(e) => setBusinessHoursOnly(e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
             <span className="text-xs text-dim">Their hours only</span>
           </label>
-        ) : null}
-        {sourcesPresent.length > 1 && (
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value as LeadSource | "all")}
-            className="text-xs border border-rule rounded-lg px-2 py-1.5 bg-panel2"
-          >
-            <option value="all">All sources</option>
-            {sourcesPresent.map((s) => (
-              <option key={s} value={s}>
-                {SOURCE_LABEL[s] ?? s}
-              </option>
-            ))}
-          </select>
         )}
         <span className="text-sm">
           <span className="font-bold text-ink tabular-nums text-base">{touchesLogged}</span>
           <span className="text-dim"> / {sessionTotal}</span>
         </span>
-        {conversations > 0 && (
-          <span className="text-sm text-accent font-semibold tabular-nums">{conversations} good</span>
-        )}
+        {conversations > 0 && <span className="text-sm text-accent font-semibold tabular-nums">{conversations} good</span>}
         <button type="button" onClick={endSession} className="text-xs text-dim hover:text-ink px-2 py-1.5 transition-colors">
           End
         </button>
@@ -623,609 +435,172 @@ export function FocusClient({
     </div>
   );
 
-  if (!current) {
+  const ratingBar = pendingRating ? (
+    <div className="rounded-xl border border-rule bg-panel2 px-4 py-3">
+      <p className="text-sm m-0 mb-2">How was the opener for {pendingRating.businessName}?</p>
+      <div className="flex flex-wrap gap-2">
+        {(
+          [
+            ["helpful", "Helpful"],
+            ["meh", "Meh"],
+            ["bad", "Bad"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => void rate(value)}
+            className="text-sm font-medium rounded-xl border border-rule bg-panel px-3 py-1.5 text-ink hover:border-accent/40"
+          >
+            {label}
+          </button>
+        ))}
+        <button type="button" onClick={() => setPendingRating(null)} className="text-sm text-dim px-3 py-1.5 hover:text-ink">
+          Skip
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  if (!current || !opener) {
     return (
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {topBar}
         <div className="flex-1 flex items-center justify-center p-8">
-          <p className="text-muted text-center max-w-sm">
-            {outOfHoursCallCount > 0
-              ? `Nothing left right now — ${outOfHoursCallCount} call${outOfHoursCallCount === 1 ? "" : "s"} waiting for the lead's business hours.`
-              : "Queue's empty. Nice work — check back after the next lead engine run."}
-          </p>
+          <div className="max-w-sm w-full space-y-4">
+            {ratingBar}
+            <p className="text-muted text-center m-0">Queue&apos;s empty. Nice work.</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  const signalEvidence = Object.entries(current.lead.signals)
-    .filter(([, v]) => v === true)
-    .map(([k]) => k.replace(/_/g, " "));
-
-  const whyLine =
-    (signalEvidence.length > 0 ? `${signalEvidence.join(", ")}. ` : "") +
-    (step?.purpose ?? current.lead.fitReasons[0] ?? "Reach out and see where it goes.");
-
-  const otherChannels: { label: string; href: string }[] = [];
-  if (channel !== "call" && current.lead.phone) otherChannels.push({ label: current.lead.phone, href: `tel:${current.lead.phone}` });
-  if (channel !== "email" && current.lead.email) otherChannels.push({ label: current.lead.email, href: `mailto:${current.lead.email}` });
-  if (channel !== "instagram" && current.lead.instagramUrl) otherChannels.push({ label: "Instagram", href: current.lead.instagramUrl });
-  if (channel !== "linkedin" && current.lead.linkedinUrl) otherChannels.push({ label: "LinkedIn", href: current.lead.linkedinUrl });
-
-  const mailtoHref = current.lead.email
-    ? `mailto:${encodeURIComponent(current.lead.email)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`
-    : null;
-  const gmailHref = current.lead.email ? gmailComposeUrl(current.lead.email, emailSubject, emailBody) : null;
+  const gmailHref =
+    mode === "email" && current.lead.email
+      ? gmailComposeUrl(current.lead.email, opener.subject || `Quick note about ${current.lead.businessName}`, opener.body)
+      : null;
+  const linkedInHref = mode === "linkedin" ? linkedInOpenUrl(current.lead.linkedinUrl) : null;
+  const variantLabel = opener.variant === "a" || opener.variant === "b" ? `Opener ${opener.variant.toUpperCase()}` : "Opener";
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden relative">
       {topBar}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-xl mx-auto px-4 md:px-6 py-6 pb-36 space-y-6">
+          {ratingBar}
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(200px,0.85fr)_minmax(280px,1.4fr)_minmax(200px,0.9fr)] overflow-hidden">
-        {/* Left: who */}
-        <div className="border-r border-rule overflow-y-auto p-5 md:p-6 space-y-5 pb-28">
-          {localTime && channel === "call" && (
-            <div
-              className={
-                "flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-xl " +
-                (localTime.inBusinessHours ? "bg-accent-soft text-accent" : "bg-warm-soft text-warm")
-              }
-            >
-              <span>
-                {localTime.label}
-                {localTime.isApproximate ? " · estimated" : ""}
-              </span>
-              <span>· {localTime.inBusinessHours ? "open now" : "likely closed"}</span>
-            </div>
-          )}
           <div>
-            <p className="section-label mb-2">
-              {channel === "call" ? "Calling" : isEmail ? "Emailing" : "Messaging"}
-            </p>
-            <h2 className="text-2xl font-bold tracking-tight leading-tight m-0">{current.lead.businessName}</h2>
+            <p className="section-label mb-1">Ask for</p>
+            <h2 className="text-2xl font-bold tracking-tight m-0">{askForLabel(current.lead.contactName)}</h2>
             <p className="text-sm text-muted mt-1.5 mb-0">
-              {[current.lead.city, current.lead.contactName ?? "Ask for the owner"].filter(Boolean).join(" · ")}
+              {current.lead.businessName}
+              {current.lead.city ? ` · ${current.lead.city}` : ""}
             </p>
-            {current.lead.contactRole && <p className="text-xs text-dim mt-0.5 mb-0">{current.lead.contactRole}</p>}
           </div>
 
-          {channel === "call" && current.lead.phone && (
-            <div className="bg-panel2 border border-rule rounded-xl p-4">
-              <p className="section-label mb-2">Phone</p>
-              <div className="flex items-center justify-between gap-2">
-                <a href={`tel:${current.lead.phone}`} className="text-xl font-bold font-mono tracking-wide text-ink hover:text-accent">
-                  {current.lead.phone}
-                </a>
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(current.lead.phone!)}
-                  className="shrink-0 text-xs font-medium text-accent border border-accent/30 rounded-lg px-2.5 py-1.5 hover:bg-accent-soft transition-colors"
+          {mode === "call" && current.lead.phone && (
+            <a
+              href={`tel:${current.lead.phone.replace(/\s/g, "")}`}
+              className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
+            >
+              Call {current.lead.phone}
+            </a>
+          )}
+
+          {mode === "email" && (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={copyDraft}
+                className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
+              >
+                {copied ? "Copied" : "Copy draft"}
+              </button>
+              {gmailHref && (
+                <a
+                  href={gmailHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center border border-accent/40 text-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-soft transition-colors"
                 >
-                  Copy
-                </button>
-              </div>
-            </div>
-          )}
-
-          {isEmail && (
-            <div className="bg-panel2 border border-rule rounded-xl p-4">
-              <p className="section-label mb-2">To</p>
-              {current.lead.email ? (
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-xl font-bold font-mono tracking-wide break-all text-ink">{current.lead.email}</span>
-                  <button
-                    type="button"
-                    onClick={() => navigator.clipboard.writeText(current.lead.email!)}
-                    className="shrink-0 text-xs font-medium text-accent border border-accent/30 rounded-lg px-2.5 py-1.5 hover:bg-accent-soft transition-colors"
-                  >
-                    Copy
-                  </button>
-                </div>
-              ) : (
-                <p className="text-sm text-stop m-0">No email on file — mark Can&apos;t send.</p>
-              )}
-            </div>
-          )}
-
-          {otherChannels.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {otherChannels.map((oc) => (
-                <a key={oc.href} href={oc.href} target="_blank" rel="noreferrer" className="text-xs text-accent underline underline-offset-2">
-                  {oc.label}
+                  Open Gmail
                 </a>
-              ))}
+              )}
+              <p className="w-full text-xs text-dim m-0">Opens a draft in your Gmail. Nothing is sent from here.</p>
+            </div>
+          )}
+
+          {mode === "linkedin" && (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={copyDraft}
+                className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
+              >
+                {copied ? "Copied" : "Copy draft"}
+              </button>
+              {linkedInHref && (
+                <a
+                  href={linkedInHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center border border-accent/40 text-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-soft transition-colors"
+                >
+                  Open LinkedIn
+                </a>
+              )}
+              <p className="w-full text-xs text-dim m-0">Paste the draft yourself. Nothing is sent from here.</p>
             </div>
           )}
 
           <div className="space-y-2">
-            <div className="flex justify-between items-baseline">
-              <p className="section-label mb-0">Match</p>
-              <span className={"text-sm font-bold " + (current.lead.fitScore >= 80 ? "text-accent" : "text-warm")}>
-                {current.lead.fitScore >= 80 ? "Strong" : current.lead.fitScore >= 50 ? "OK" : "Weak"}
-              </span>
-            </div>
-            <div className="h-1.5 bg-rule rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${current.lead.fitScore}%`, background: current.lead.fitScore >= 80 ? "var(--accent)" : "var(--warm)" }}
-              />
-            </div>
+            <p className="section-label mb-0">{variantLabel}</p>
+            {mode === "email" && opener.subject && <p className="text-sm font-medium m-0">{opener.subject}</p>}
+            <p className="text-base leading-relaxed m-0 whitespace-pre-wrap">{opener.body || "No opener on this campaign yet. Add scripts on the campaign Scripts tab."}</p>
           </div>
 
-          {(current.lead.fitReasons.length > 0 || current.lead.fitFlags.length > 0) && (
-            <div className="flex flex-wrap gap-1.5">
-              {current.lead.fitReasons.map((s) => (
-                <span key={s} className="text-[11px] bg-accent-soft text-accent border border-accent/20 rounded-full px-2.5 py-0.5">
-                  {humanizeTag(s)}
-                </span>
-              ))}
-              {current.lead.fitFlags.map((g) => (
-                <span key={g} className="text-[11px] bg-panel2 text-muted rounded-full px-2.5 py-0.5">
-                  {humanizeTag(g)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {(current.lead.sourceUrl || current.lead.website) && (
-            <div className="flex flex-wrap gap-3 text-xs">
-              {current.lead.website && (
-                <a href={current.lead.website} target="_blank" rel="noreferrer" className="text-dim hover:text-ink underline underline-offset-2">
-                  Website
-                </a>
-              )}
-              {current.lead.sourceUrl && (
-                <a href={current.lead.sourceUrl} target="_blank" rel="noreferrer" className="text-dim hover:text-ink underline underline-offset-2">
-                  Source
-                </a>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Center: plan + draft */}
-        <div className="border-r border-rule overflow-y-auto p-5 md:p-7 space-y-5 pb-28">
-          <div>
-            <p className="section-label mb-2">Why them</p>
-            <p className="text-sm text-muted leading-relaxed m-0">{whyLine}</p>
-          </div>
-
-          {isEmail ? (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center gap-2">
-                <p className="section-label mb-0 text-accent">Send this</p>
-                <button type="button" onClick={copy} className="text-xs text-accent font-medium">
-                  {copied ? "Copied!" : "Copy · C"}
-                </button>
-              </div>
-              <div className="bg-panel2 border border-accent/25 rounded-2xl overflow-hidden">
-                <div className="px-5 pt-4 pb-3 border-b border-rule/70">
-                  <p className="section-label mb-1.5">Subject</p>
-                  <input
-                    value={emailSubject}
-                    onChange={(e) => {
-                      setEmailSubject(e.target.value);
-                      setDraft(joinEmailDraft(e.target.value, emailBody));
-                    }}
-                    className="w-full bg-transparent border-0 p-0 text-xl font-semibold tracking-tight text-ink placeholder:text-dim focus:outline-none"
-                    placeholder="Subject line"
-                  />
-                </div>
-                <div className="px-5 py-4">
-                  <p className="section-label mb-2">Body</p>
-                  <textarea
-                    className="w-full bg-transparent border-0 p-0 text-xl md:text-2xl font-medium leading-snug resize-none focus:outline-none min-h-[200px] text-ink placeholder:text-dim"
-                    value={emailBody}
-                    onChange={(e) => {
-                      setEmailBody(e.target.value);
-                      setDraft(joinEmailDraft(emailSubject, e.target.value));
-                    }}
-                    placeholder={`Hi ${firstNameOf(current.lead.contactName)},`}
-                  />
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2.5">
-                {gmailHref && (
-                  <a
-                    href={gmailHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
-                  >
-                    Open Gmail
-                  </a>
-                )}
-                {!gmailHref && mailtoHref && (
-                  <a
-                    href={mailtoHref}
-                    className="inline-flex items-center justify-center border border-accent/40 text-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-soft transition-colors"
-                  >
-                    Open mail app
-                  </a>
-                )}
-                <button
-                  type="button"
-                  onClick={copy}
-                  className="text-sm font-medium text-muted border border-rule rounded-xl px-4 py-3 hover:text-ink hover:border-accent/30 transition-colors"
-                >
-                  {copied ? "Copied!" : "Copy"}
-                </button>
-              </div>
-              <p className="text-xs text-dim m-0">You send it from your own inbox. The app never does.</p>
-            </div>
-          ) : isCall ? (
-            <div className="space-y-4">
-              <div>
-                <p className="section-label mb-2">Which script did you use?</p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(["a", "b"] as const).map((letter, idx) => {
-                    const text = renderedCallScripts[idx]!;
-                    const selected = scriptUsed === letter;
-                    return (
-                      <button
-                        key={letter}
-                        type="button"
-                        onClick={() => pickCallScript(letter)}
-                        className={
-                          "text-left rounded-2xl border px-4 py-3 transition-colors " +
-                          (selected
-                            ? "border-accent bg-accent-soft"
-                            : "border-rule bg-panel2 hover:border-accent/30")
-                        }
-                      >
-                        <p className={"text-xs font-semibold mb-1.5 " + (selected ? "text-accent" : "text-muted")}>
-                          Script {letter.toUpperCase()}
-                          {selected ? " · selected" : ""}
-                        </p>
-                        <p className={"text-sm leading-snug m-0 " + (text ? "text-ink" : "text-dim italic")}>
-                          {text || "Empty — add this script on the campaign Playbook tab."}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <p className="section-label mb-0 text-accent">Say this</p>
-                  <button type="button" onClick={copy} className="text-xs text-accent font-medium">
-                    {copied ? "Copied!" : "Copy · C"}
-                  </button>
-                </div>
-                <textarea
-                  className="w-full bg-panel2 border border-accent/25 rounded-2xl px-5 py-4 text-xl md:text-2xl font-medium leading-snug resize-none focus:outline-none focus:border-accent/50 min-h-[140px] text-ink"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder="Pick a script above, or type what you’ll say"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="section-label mb-0 mr-1">Was it good?</p>
-                <button
-                  type="button"
-                  onClick={() => setScriptRating((r) => (r === "up" ? null : "up"))}
-                  className={
-                    "text-sm font-medium rounded-xl border px-3.5 py-2 transition-colors " +
-                    (scriptRating === "up"
-                      ? "border-accent bg-accent-soft text-accent"
-                      : "border-rule bg-panel2 text-muted hover:text-ink")
-                  }
-                >
-                  Thumbs up
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScriptRating((r) => (r === "down" ? null : "down"))}
-                  className={
-                    "text-sm font-medium rounded-xl border px-3.5 py-2 transition-colors " +
-                    (scriptRating === "down"
-                      ? "border-stop/40 bg-stop-soft text-stop"
-                      : "border-rule bg-panel2 text-muted hover:text-ink")
-                  }
-                >
-                  Thumbs down
-                </button>
-                {!scriptUsed && (
-                  <span className="text-xs text-dim">Optional — outcome still saves without a pick.</span>
-                )}
-              </div>
-            </div>
-          ) : (
+          {objections.length > 0 && (
             <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <p className="section-label mb-0 text-accent">Send this</p>
-                <button type="button" onClick={copy} className="text-xs text-accent font-medium">
-                  {copied ? "Copied!" : "Copy · C"}
-                </button>
-              </div>
-              <textarea
-                className="w-full bg-panel2 border border-accent/25 rounded-2xl px-5 py-4 text-xl md:text-2xl font-medium leading-snug resize-none focus:outline-none focus:border-accent/50 min-h-[160px] text-ink"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-              />
-            </div>
-          )}
-
-          {step?.tip && (
-            <div className="space-y-1">
-              <p className="section-label mb-0">Tip</p>
-              <p className="text-sm text-muted m-0">{step.tip}</p>
-            </div>
-          )}
-
-          {current.campaign.strategy.cadence?.length > 0 && (
-            <div className="flex gap-1.5 flex-wrap">
-              {current.campaign.strategy.cadence.map((c, i) => (
-                <span
-                  key={i}
-                  className={
-                    "text-xs px-2.5 py-1 rounded-lg border " +
-                    (i === current.lead.cadenceStep
-                      ? "border-accent bg-accent-soft font-semibold"
-                      : i < current.lead.cadenceStep
-                        ? "border-rule text-dim line-through opacity-60"
-                        : "border-rule text-dim")
-                  }
-                >
-                  Day {c.day}: {CHANNEL_LABEL[c.channel]}
-                </span>
+              <p className="section-label mb-0">If they push back</p>
+              {objections.map((item) => (
+                <div key={item.question} className="rounded-xl border border-rule bg-panel2 px-4 py-3">
+                  <p className="text-sm font-medium m-0">{item.question}</p>
+                  <p className="text-sm text-muted mt-1.5 mb-0 leading-relaxed">{item.answer}</p>
+                </div>
               ))}
             </div>
           )}
 
-          {pastedOutcome === "meeting_booked" ? (
-            <div className="space-y-3 border-t border-rule pt-4">
-              <p className="section-label mb-0">Book the meeting</p>
-              <input
-                type="datetime-local"
-                value={meetingAt}
-                onChange={(e) => setMeetingAt(e.target.value)}
-                className="w-full bg-panel2 border border-rule rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent/40"
-              />
-              <input
-                value={meetingNote}
-                onChange={(e) => setMeetingNote(e.target.value)}
-                placeholder="What do they care about most?"
-                className="w-full bg-panel2 border border-rule rounded-xl px-3 py-2 text-sm placeholder-muted focus:outline-none focus:border-accent/40"
-              />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOutcome("meeting_booked")}
-                  disabled={!meetingAt || busy}
-                  className="flex-1 bg-accent text-on-accent font-semibold py-2.5 rounded-xl hover:bg-accent-hover transition-colors text-sm disabled:opacity-40"
-                >
-                  {busy ? "Saving…" : "Confirm meeting & next lead"}
-                </button>
-                <button type="button" onClick={() => setPastedOutcome(null)} disabled={busy} className="px-4 py-2.5 text-muted rounded-xl text-sm">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : pastedOutcome ? (
-            <div className="space-y-2 border-t border-rule pt-4">
-              <p className="text-sm font-medium">What they said (optional)</p>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 border border-rule rounded-lg px-3 py-2 bg-panel2 text-sm"
-                  value={pastedMessage}
-                  onChange={(e) => setPastedMessage(e.target.value)}
-                  placeholder="Paste their words"
-                />
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleOutcome(pastedOutcome, pastedMessage)}
-                  className="bg-accent text-on-accent font-semibold px-4 rounded-xl text-sm disabled:opacity-40"
-                >
-                  {busy ? "Saving…" : "Log"}
-                </button>
-                <button type="button" onClick={() => setPastedOutcome(null)} disabled={busy} className="px-4 text-muted rounded-xl text-sm">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {error && <p className="text-sm text-stop">{error}</p>}
-        </div>
-
-        {/* Right: help — call objections, or email rewrite helpers */}
-        <div className="overflow-y-auto p-5 space-y-4 pb-28">
-          {isEmail ? (
-            <>
-              <p className="section-label mb-0">Rewrite</p>
-              <div className="flex flex-wrap gap-2">
-                {EMAIL_REWRITE_STYLES.map((opt) => (
-                  <button
-                    key={opt.style}
-                    type="button"
-                    disabled={rewriteBusy}
-                    onClick={() => void runEmailRewrite(opt.style)}
-                    className="text-sm font-medium border border-rule rounded-xl px-3.5 py-2.5 bg-panel2 text-ink hover:border-accent/40 hover:text-accent transition-colors disabled:opacity-40"
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-              {rewriteBusy && <p className="text-xs text-muted m-0">Rewriting…</p>}
-              {rewriteNote && <p className="text-xs text-muted m-0">{rewriteNote}</p>}
-
-              <div className="border-t border-rule pt-4 space-y-2">
-                <p className="section-label mb-0">Ask for a different angle</p>
-                <textarea
-                  value={askFlow}
-                  onChange={(e) => setAskFlow(e.target.value)}
-                  placeholder="Stuck? e.g. Lead with their website redesign…"
-                  rows={4}
-                  className="w-full bg-panel2 border border-rule rounded-xl p-3 text-sm placeholder-muted resize-none focus:outline-none focus:border-accent/40"
-                />
-                <button
-                  type="button"
-                  onClick={() => void runEmailRewrite("custom")}
-                  disabled={!askFlow.trim() || rewriteBusy}
-                  className="text-xs font-medium text-accent border border-accent/30 rounded-lg px-3 py-1.5 hover:bg-accent-soft transition-colors disabled:opacity-40"
-                >
-                  {rewriteBusy ? "Thinking…" : "Rewrite with this"}
-                </button>
-              </div>
-
-              {current.campaign.strategy.objections?.length > 0 && (
-                <div className="border-t border-rule pt-4 space-y-2">
-                  <p className="section-label mb-0">If they push back later</p>
-                  {current.campaign.strategy.objections.slice(0, 4).map((o, i) => (
-                    <details key={i} className="bg-panel2 border border-rule rounded-xl px-3 py-2.5">
-                      <summary className="text-sm font-medium cursor-pointer">{o.question}</summary>
-                      <p className="text-sm text-muted mt-2 leading-relaxed m-0">{o.answer}</p>
-                    </details>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <p className="text-[10px] text-muted uppercase tracking-widest">If they push back</p>
-              {objections.length === 0 ? (
-                <p className="text-sm text-muted">No objection playbook for this campaign yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {objections.map((o) => {
-                    const isActive = activeObjectionId === o.id;
-                    const fb = objectionFeedback[o.id];
-                    const rate = o.uses > 0 ? Math.round((o.keptTalkingCount / o.uses) * 100) : 0;
-                    return (
-                      <div key={o.id}>
-                        <button
-                          onClick={() => setActiveObjectionId(isActive ? null : o.id)}
-                          className={
-                            "w-full text-left px-3 py-2.5 rounded-xl border text-sm font-medium transition-all " +
-                            (isActive ? "bg-accent-soft border-accent/30 text-accent" : "bg-panel2 border-rule text-body hover:border-accent/20 hover:text-ink")
-                          }
-                        >
-                          {o.objection}
-                        </button>
-                        {isActive && (
-                          <div className="mt-2 bg-accent-soft border border-accent/20 rounded-xl p-4 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <Chip tone={o.status === "proven" ? "go" : o.status === "retired" ? "stop" : o.status === "testing" ? "acc" : "default"}>
-                                {o.status === "new" ? "New" : `${o.status} · ${rate}% (${o.keptTalkingCount}/${o.uses})`}
-                              </Chip>
-                            </div>
-                            <p className="text-sm leading-relaxed">{o.responseText}</p>
-                            {fb ? (
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className={fb === "kept_talking" ? "text-go" : "text-stop"}>{fb === "kept_talking" ? "Kept talking" : "Lost them"}</span>
-                                <span className="text-muted">· Flow noted</span>
-                              </div>
-                            ) : (
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => giveObjectionFeedback(o.id, "kept_talking")}
-                                  className="flex items-center gap-1.5 text-xs text-muted border border-rule rounded-lg px-3 py-1.5 hover:border-accent/40 hover:text-accent transition-colors"
-                                >
-                                  Kept them talking
-                                </button>
-                                <button
-                                  onClick={() => giveObjectionFeedback(o.id, "lost")}
-                                  className="flex items-center gap-1.5 text-xs text-muted border border-rule rounded-lg px-3 py-1.5 hover:border-stop/40 hover:text-stop transition-colors"
-                                >
-                                  Lost them
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div className="border-t border-rule pt-4 space-y-2">
-                <p className="section-label mb-0">What did they say?</p>
-                <textarea
-                  value={theySaid || notes}
-                  onChange={(e) => {
-                    setTheySaid(e.target.value);
-                    setNotes(e.target.value);
-                  }}
-                  placeholder="Their words, or anything to remember for next time"
-                  rows={4}
-                  className="w-full bg-panel2 border border-rule rounded-xl p-3 text-sm placeholder-muted resize-none focus:outline-none focus:border-accent/40"
-                />
-                <button
-                  type="button"
-                  onClick={getCoaching}
-                  disabled={!theySaid.trim() || coachingBusy}
-                  className="text-xs font-medium text-accent border border-accent/30 rounded-lg px-3 py-1.5 hover:bg-accent-soft transition-colors disabled:opacity-40"
-                >
-                  {coachingBusy ? "Thinking…" : "Get a reply line"}
-                </button>
-                {coachingResponse && (
-                  <div className="bg-accent-soft border border-accent/20 rounded-xl p-3 space-y-1">
-                    <p className="text-sm leading-relaxed m-0">{coachingResponse.response}</p>
-                    {coachingResponse.source === "fallback" && (
-                      <p className="text-[10px] text-dim m-0">AI unavailable — matched from your saved playbook.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+          {error && <p className="text-sm text-stop m-0">{error}</p>}
         </div>
       </div>
 
-      {/* Pinned outcome bar */}
       <div className="absolute bottom-0 left-0 right-0 bg-panel/95 backdrop-blur-sm border-t border-rule px-4 md:px-6 py-3 z-20">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="max-w-xl mx-auto flex flex-wrap items-center gap-2">
           <span className="section-label mr-1 mb-0 hidden sm:inline">How did it go?</span>
-          {busy && (
-            <span className="text-xs text-accent inline-flex items-center gap-1.5 mr-1">
-              <span className="btn-spinner inline-block w-3 h-3 border-2 border-accent/25 border-t-accent rounded-full" />
-              Saving…
-            </span>
-          )}
-          {outcomes.map((o) => (
+          {outcomes.map((item) => (
             <button
               type="button"
-              key={o.outcome}
+              key={item.outcome}
               disabled={busy}
-              onClick={() => handleOutcome(o.outcome)}
+              onClick={() => void handleOutcome(item.outcome)}
               className={
                 "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-all duration-150 active:scale-[0.97] disabled:opacity-40 " +
-                (o.variant === "go"
+                (item.variant === "go"
                   ? "bg-accent-soft border-accent/40 text-accent"
-                  : o.variant === "stop"
+                  : item.variant === "stop"
                     ? "bg-stop-soft border-stop/30 text-stop"
                     : "bg-panel2 border-rule text-muted hover:text-ink hover:border-accent/20")
               }
             >
-              <span>{o.label}</span>
-              <span className="font-mono text-[10px] opacity-40">{o.key}</span>
+              <span>{item.label}</span>
+              <span className="font-mono text-[10px] opacity-40">{item.key}</span>
             </button>
           ))}
           <button type="button" onClick={skip} disabled={busy} className="text-xs text-dim hover:text-ink px-3 py-2 active:scale-[0.97]">
             Skip · S
           </button>
-          {channel === "call" && (
-            <details className="ml-auto">
-              <summary className="text-xs text-dim cursor-pointer list-none hover:text-ink px-2 py-1">Next channel…</summary>
-              <select
-                className="mt-1 text-xs border border-rule rounded-lg px-2 py-1.5 bg-panel2 block"
-                value={followUpChannel ?? ""}
-                onChange={(e) => setFollowUpChannel((e.target.value || null) as Channel | null)}
-              >
-                <option value="">Stay on plan</option>
-                {CHANNEL_FILTERS.map((c) => (
-                  <option key={c} value={c}>
-                    {CHANNEL_LABEL[c]}
-                  </option>
-                ))}
-              </select>
-            </details>
-          )}
         </div>
       </div>
     </div>

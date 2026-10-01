@@ -127,6 +127,7 @@ export async function getQueueForUser(ownerId: string, limit = 50) {
 
   return sliced.map((lead) => {
     const strategy = lead.campaign.strategy as unknown as CampaignStrategy;
+    // Cadence channel only. Focus Call counts phones (focusMode.leadEligibleForFocusMode), not this value.
     const channel = resolveLeadChannel({
       strategy,
       cadenceStep: lead.cadenceStep,

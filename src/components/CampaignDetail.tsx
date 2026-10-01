@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Btn, Chip, Panel, SectionLabel, Tabs } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import type { CampaignStrategy } from "@/server/strategy";
+import { detailingStarterStrategy } from "@/server/detailingStrategy";
 import {
   updateCampaignStrategy,
   rethinkStrategy,
@@ -132,6 +133,7 @@ export function CampaignDetail({
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "icp", label: "ICP and lead gen" },
+          { key: "scripts", label: "Scripts" },
           { key: "playbook", label: "Playbook" },
           { key: "knowledge", label: "Knowledge" },
           { key: "log", label: "Log" },
@@ -286,6 +288,21 @@ export function CampaignDetail({
         </div>
       )}
 
+      {tab === "scripts" && (
+        <ScriptsPanel
+          strategy={strategy}
+          canManage={canManage}
+          productName={campaign.productName}
+          location={campaign.location}
+          goal={campaign.goal}
+          onChange={update}
+          onSave={save}
+          dirty={dirty}
+          saving={saving}
+          saveError={saveError}
+        />
+      )}
+
       {tab === "playbook" && (
         <PlaybookEditor
           campaignId={campaign.id}
@@ -385,6 +402,99 @@ function CampaignActions({ campaign, canManage }: { campaign: CampaignData; canM
       )}
     </div>
       {error && <p className="text-sm text-stop mt-2">{error}</p>}
+    </div>
+  );
+}
+
+function ScriptsPanel({
+  strategy,
+  canManage,
+  productName,
+  location,
+  goal,
+  onChange,
+  onSave,
+  dirty,
+  saving,
+  saveError,
+}: {
+  strategy: CampaignStrategy;
+  canManage: boolean;
+  productName: string;
+  location: string | null;
+  goal: string | null;
+  onChange: (mutator: (s: CampaignStrategy) => CampaignStrategy) => void;
+  onSave: () => void;
+  dirty: boolean;
+  saving: boolean;
+  saveError: string | null;
+}) {
+  function setPair(field: "call_scripts" | "email_scripts", idx: 0 | 1, value: string) {
+    onChange((current) => {
+      const next: [string, string] = [current[field]?.[0] ?? "", current[field]?.[1] ?? ""];
+      next[idx] = value;
+      return { ...current, [field]: next };
+    });
+  }
+
+  const fields: { field: "call_scripts" | "email_scripts"; label: string }[] = [
+    { field: "call_scripts", label: "Call" },
+    { field: "email_scripts", label: "Email" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <h2 className="text-[17px] font-medium mb-1">Scripts</h2>
+        <p className="text-sm text-muted m-0 mb-4">
+          Two openers each for calls and email. Focus assigns A or B on every touch and stores it. You don&apos;t pick.
+          Placeholders: {"{name} {biz} {city} {me} {product}"}
+        </p>
+        {fields.map(({ field, label }) => (
+          <div key={field} className="mb-4">
+            <p className="text-sm font-medium mb-2">{label}</p>
+            {(["A", "B"] as const).map((letter, idx) => (
+              <label key={letter} className="block text-xs text-muted mb-3">
+                Script {letter}
+                <textarea
+                  className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg mt-1 text-sm"
+                  rows={4}
+                  disabled={!canManage}
+                  value={strategy[field]?.[idx] ?? ""}
+                  onChange={(e) => setPair(field, idx as 0 | 1, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+        ))}
+        {canManage && (
+          <button
+            type="button"
+            className="text-sm text-accent font-medium"
+            onClick={() => {
+              if (!window.confirm("Replace this draft with the auto detailing starter? Nothing is saved until you click Save.")) return;
+              onChange(() =>
+                detailingStarterStrategy({
+                  productName,
+                  productType: "service",
+                  productSummary: productName,
+                  location: location ?? undefined,
+                  buyerGuess: strategy.icp.buyer,
+                  goal: goal ?? undefined,
+                }),
+              );
+            }}
+          >
+            Load detailing starter
+          </button>
+        )}
+      </Panel>
+      {saveError && <p className="text-sm text-stop">{saveError}</p>}
+      {canManage && (
+        <Btn variant="primary" disabled={!dirty} loading={saving} onClick={onSave}>
+          {saving ? "Saving…" : "Save changes"}
+        </Btn>
+      )}
     </div>
   );
 }
@@ -645,32 +755,9 @@ function PlaybookEditor({
         )}
       </Panel>
 
-      <Panel>
-        <h3 className="text-sm font-medium mb-1">Call scripts</h3>
-        <p className="text-xs text-muted mb-3 m-0">
-          Two openers for Focus. Reps pick which one they used and thumbs up or down — no AI, just data for What&apos;s Working.
-        </p>
-        {(["a", "b"] as const).map((letter, idx) => (
-          <label key={letter} className="block text-xs text-muted mb-3">
-            Script {letter.toUpperCase()}
-            <textarea
-              className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg mt-1 text-sm"
-              rows={3}
-              disabled={!canManage}
-              placeholder={letter === "a" ? "Hi {name}, this is {me} from {product}…" : "Optional second opener to try"}
-              value={strategy.call_scripts?.[idx] ?? ""}
-              onChange={(e) =>
-                onChange((s) => {
-                  const next: [string, string] = [s.call_scripts?.[0] ?? "", s.call_scripts?.[1] ?? ""];
-                  next[idx] = e.target.value;
-                  return { ...s, call_scripts: next };
-                })
-              }
-            />
-          </label>
-        ))}
-        <p className="text-xs text-muted m-0">Placeholders: {"{name} {biz} {city} {me} {product}"}</p>
-      </Panel>
+      <p className="text-sm text-muted m-0">
+        Call and email A/B openers live on the Scripts tab. Focus assigns one on each touch.
+      </p>
 
       <Panel>
         <h3 className="text-sm font-medium mb-2">Messages</h3>

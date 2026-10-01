@@ -1,69 +1,18 @@
-import { z } from "zod";
 import { callClaudeJSON, AiUnavailableError, estimatePreCallCostUsd } from "@/server/ai/client";
 import { SYSTEM_PROMPT, buildUserPrompt, PROMPT_VERSION } from "@/server/ai/prompts/campaign-strategy";
+import { detailingStarterStrategy, isAutoDetailingContext } from "@/server/detailingStrategy";
 import { getOrgSettings } from "@/server/settings";
+import { campaignStrategySchema, type CampaignStrategy } from "@/server/playbook";
 
-export const channelSchema = z.enum(["email", "call", "instagram", "linkedin"]);
-
-export const campaignStrategySchema = z.object({
-  summary: z.string(),
-  icp: z.object({
-    buyer: z.string(),
-    business: z.string(),
-    location: z.string(),
-    size: z.string(),
-    triggers: z.array(z.string()),
-    disqualifiers: z.array(z.string()),
-  }),
-  channels: z.array(z.object({ channel: channelSchema, why: z.string() })),
-  cadence: z.array(
-    z.object({ day: z.number().int().min(0), channel: channelSchema, purpose: z.string(), tip: z.string() }),
-  ),
-  messages: z.record(channelSchema, z.object({ first: z.string(), follow: z.string() })),
-  objections: z.array(z.object({ question: z.string(), answer: z.string() })),
-  lead_gen: z.object({
-    sources: z.array(z.string()),
-    search_queries: z.array(z.string()),
-    must_have: z.array(z.string()),
-    score_boost: z.array(z.string()),
-  }),
-  kill_rule: z.string(),
-  /** Two call openers typed by a person — A/B data collection, no AI. */
-  call_scripts: z
-    .tuple([z.string(), z.string()])
-    .optional()
-    .transform((v): [string, string] => (v ?? ["", ""]) as [string, string]),
-});
-
-export type CampaignStrategy = z.infer<typeof campaignStrategySchema>;
-
-function fillPlaceholders(template: string, values: Record<string, string>) {
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? `{${key}}`);
-}
-
-export function getCallScripts(strategy: CampaignStrategy | null | undefined): [string, string] {
-  const scripts = strategy?.call_scripts;
-  if (Array.isArray(scripts) && scripts.length >= 2) return [scripts[0] ?? "", scripts[1] ?? ""];
-  return ["", ""];
-}
-
-export function renderScriptTemplate(
-  template: string,
-  values: { name: string; biz: string; city: string; me: string; product: string },
-) {
-  return fillPlaceholders(template, values);
-}
-
-export function renderMessage(
-  strategy: CampaignStrategy,
-  channel: string,
-  variant: "first" | "follow",
-  values: { name: string; biz: string; city: string; me: string; product: string },
-) {
-  const msg = strategy.messages[channel as keyof typeof strategy.messages];
-  if (!msg) return "";
-  return fillPlaceholders(msg[variant], values);
-}
+export {
+  campaignStrategySchema,
+  channelSchema,
+  getCallScripts,
+  getEmailScripts,
+  renderMessage,
+  renderScriptTemplate,
+} from "@/server/playbook";
+export type { CampaignStrategy } from "@/server/playbook";
 
 /**
  * Product-type template used when the campaign builder's AI step is
@@ -78,6 +27,10 @@ export function fallbackStrategy(input: {
   buyerGuess?: string;
   goal?: string;
 }): CampaignStrategy {
+  if (isAutoDetailingContext([input.productName, input.productSummary, input.buyerGuess, input.goal])) {
+    return detailingStarterStrategy(input);
+  }
+
   const loc = input.location || "your target area";
   const buyer = input.buyerGuess || (input.productType === "service" ? "The owner or operations lead" : "The person who owns this problem day to day");
 
@@ -135,7 +88,14 @@ export function fallbackStrategy(input: {
       score_boost: ["Shows a public trigger signal"],
     },
     kill_rule: "Pause at 150 touches if reply rate is under 1% or bounce rate is over 5%.",
-    call_scripts: ["", ""],
+    call_scripts: [
+      "Hi, is this {name}? This is {me}. I noticed something at {biz} in {city} and wanted to say it directly. Got two minutes?",
+      "Hi {name}, {me} again. Quick one about {biz}. {product} was built for this kind of problem. Worth ten minutes this week?",
+    ],
+    email_scripts: [
+      `Subject: A quick note about {biz}\n\nHi {name},\n\nI noticed something at {biz} that ${input.productName} was built for. Worth 10 minutes to see if it's a fit?\n\n{me}`,
+      `Subject: {biz} this week\n\nHi {name},\n\nDifferent angle: if ${input.productName} saved {biz} one headache a week, would ten minutes be worth it?\n\n{me}`,
+    ],
   };
 }
 
@@ -206,6 +166,7 @@ export async function generateCampaignStrategy(
     const finalStrategy: CampaignStrategy = {
       ...strategy,
       call_scripts: strategy.call_scripts ?? ["", ""],
+      email_scripts: strategy.email_scripts ?? ["", ""],
       ...(input.approvedIcp ? { icp: input.approvedIcp } : {}),
     };
     return { strategy: finalStrategy, source: "ai", promptVersion: PROMPT_VERSION };
