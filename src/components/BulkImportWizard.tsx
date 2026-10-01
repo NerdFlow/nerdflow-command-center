@@ -74,7 +74,13 @@ export function BulkImportWizard({
   const [missingContact, setMissingContact] = useState(0);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ imported: number; duplicates: number; total: number; missingContact: number } | null>(null);
+  const [result, setResult] = useState<{
+    imported: number;
+    duplicates: number;
+    phonesBackfilled?: number;
+    total: number;
+    missingContact: number;
+  } | null>(null);
 
   const selectedCampaign = campaigns.find((c) => c.id === campaignId);
   const multiRep = reps.length > 1;
@@ -178,7 +184,12 @@ export function BulkImportWizard({
       if (!res) throw new Error("Import failed — try reloading the page and importing again.");
       setResult(res);
       setStep("done");
-      toast(`${res.imported} new · ${res.duplicates} duplicates skipped.`);
+      const phones = res.phonesBackfilled ?? 0;
+      toast(
+        phones > 0
+          ? `${res.imported} new · ${phones} existing leads got a phone`
+          : `${res.imported} new · ${res.duplicates} duplicates skipped.`,
+      );
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't import these leads.");
@@ -332,10 +343,16 @@ export function BulkImportWizard({
               <p className="stat-number text-accent m-0">{preview.total - preview.duplicates}</p>
               <p className="text-xs text-dim mt-1.5 mb-0">new</p>
             </div>
+            {(preview.phonesBackfilled ?? 0) > 0 && (
+              <div>
+                <p className="stat-number text-accent m-0">{preview.phonesBackfilled}</p>
+                <p className="text-xs text-dim mt-1.5 mb-0">phones to add</p>
+              </div>
+            )}
             <div>
-              <p className="stat-number m-0">{preview.duplicates}</p>
+              <p className="stat-number m-0">{Math.max(0, preview.duplicates - (preview.phonesBackfilled ?? 0))}</p>
               <p className="text-xs text-dim mt-1.5 mb-0">
-                duplicate{preview.duplicates === 1 ? "" : "s"} skipped
+                duplicate{preview.duplicates - (preview.phonesBackfilled ?? 0) === 1 ? "" : "s"} skipped
               </p>
             </div>
             <div>
@@ -348,7 +365,11 @@ export function BulkImportWizard({
             {" · "}
             <span className="text-ink font-medium">{focusDestination()}</span>
             .{" "}
-            {preview.rows.filter((r) => !r.isDuplicate && r.row.phone).length} with a phone will show under Call the same day.
+            {preview.rows.filter((r) => !r.isDuplicate && r.row.phone).length} new with a phone
+            {(preview.phonesBackfilled ?? 0) > 0
+              ? ` · ${preview.phonesBackfilled} already in Focus will gain a phone (owner and status stay)`
+              : ""}
+            . Call counts leads that have a phone.
           </p>
           <div className="max-h-64 overflow-y-auto border border-rule rounded-xl">
             <table className="w-full text-sm">
@@ -365,7 +386,13 @@ export function BulkImportWizard({
                     <td className="p-3">{r.row.business_name}</td>
                     <td className="p-3 text-muted">{r.row.phone ?? "—"}</td>
                     <td className="p-3">
-                      {r.isDuplicate ? <Chip tone="cold">Duplicate</Chip> : <Chip tone="go">New</Chip>}
+                      {r.willBackfillPhone ? (
+                        <Chip tone="go">Add phone</Chip>
+                      ) : r.isDuplicate ? (
+                        <Chip tone="cold">Duplicate</Chip>
+                      ) : (
+                        <Chip tone="go">New</Chip>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -373,7 +400,13 @@ export function BulkImportWizard({
             </table>
           </div>
           <Btn variant="primary" size="lg" loading={working} onClick={commit}>
-            {working ? "Importing…" : `Import ${preview.total - preview.duplicates} leads`}
+            {working
+              ? "Importing…"
+              : (preview.phonesBackfilled ?? 0) > 0 && preview.total - preview.duplicates === 0
+                ? `Add phones to ${preview.phonesBackfilled} leads`
+                : `Import ${preview.total - preview.duplicates} leads${
+                    (preview.phonesBackfilled ?? 0) > 0 ? ` · add ${preview.phonesBackfilled} phones` : ""
+                  }`}
           </Btn>
         </div>
       )}
@@ -383,7 +416,9 @@ export function BulkImportWizard({
           <div>
             <SectionLabel className="mb-3">Import complete</SectionLabel>
             <p className="next-action m-0 mb-1">
-              {result.imported} new · {result.duplicates} duplicates skipped
+              {result.imported} new
+              {(result.phonesBackfilled ?? 0) > 0 ? ` · ${result.phonesBackfilled} phones added to existing leads` : ""}
+              {` · ${Math.max(0, result.duplicates - (result.phonesBackfilled ?? 0))} duplicates skipped`}
             </p>
             {result.missingContact > 0 && (
               <p className="text-sm text-muted m-0 mt-2">

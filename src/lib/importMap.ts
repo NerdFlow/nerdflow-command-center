@@ -17,6 +17,8 @@ export const IMPORT_FIELDS: { key: keyof LeadRowInput; label: string; required?:
 export type FieldMapping = Partial<Record<keyof LeadRowInput, string>> & {
   /** Used when the primary email cell is blank (Generic Email under Corporate Email). */
   email_fallback?: string;
+  /** Used when the primary phone cell is blank (Generic Phone under Corporate Phone). */
+  phone_fallback?: string;
 };
 
 const ALIASES: Record<keyof LeadRowInput, string[]> = {
@@ -58,6 +60,45 @@ function findHeader(headers: string[], aliases: string[], used: Set<string>): st
   return undefined;
 }
 
+/** A column that holds a dial number, including Corporate Phone, Phone 1, Work Phone. Fax is not one. */
+export function isPhoneHeader(header: string): boolean {
+  const key = normalizeHeader(header);
+  if (!key || key.includes("fax") || key.includes("headphone") || key.includes("microphone")) return false;
+  return key.includes("phone") || key.includes("mobile") || key.includes("telephone") || key === "tel" || key === "cell" || /(^|_)tel(_|$)/.test(key);
+}
+
+function phoneHeaderRank(header: string): number {
+  const key = normalizeHeader(header);
+  if (/(corporate|company|business|main|work|direct)/.test(key)) return 0;
+  if (key === "phone" || key === "phone_number" || key === "phonenumber" || key === "telephone") return 1;
+  if (/(generic|mobile|cell)/.test(key)) return 2;
+  return 3;
+}
+
+/**
+ * Keep a dialable value. Formatted US numbers such as (203) 668-8164 stay as typed.
+ * Excel numeric cells and scientific notation are expanded. Anything under 7 digits is dropped.
+ */
+export function usablePhone(raw: unknown): string | null {
+  if (raw == null) return null;
+  let text: string;
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return null;
+    text = Number.isSafeInteger(raw) ? raw.toFixed(0) : String(raw);
+  } else {
+    text = String(raw).trim();
+  }
+  if (!text) return null;
+  const compact = text.replace(/\s/g, "");
+  if (/^[\d.]+e\+?\d+$/i.test(compact)) {
+    const n = Number(compact);
+    if (Number.isFinite(n)) text = Math.round(n).toFixed(0);
+  }
+  const digits = text.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) return null;
+  return text.trim();
+}
+
 export function autoMapFields(headers: string[]): FieldMapping {
   const mapping: FieldMapping = {};
   const used = new Set<string>();
@@ -93,25 +134,40 @@ export function autoMapFields(headers: string[]): FieldMapping {
     }
   }
 
+  const phoneHeaders = headers
+    .filter((header) => isPhoneHeader(header))
+    .sort((a, b) => phoneHeaderRank(a) - phoneHeaderRank(b) || headers.indexOf(a) - headers.indexOf(b));
+  if (phoneHeaders[0]) {
+    mapping.phone = phoneHeaders[0];
+    used.add(phoneHeaders[0]);
+  }
+  if (phoneHeaders[1]) mapping.phone_fallback = phoneHeaders[1];
+
   return mapping;
 }
 
-function cell(row: Record<string, string>, header: string | undefined): string {
+function cell(row: Record<string, unknown>, header: string | undefined): string {
   if (!header) return "";
   const value = row[header];
-  return value == null ? "" : String(value).trim();
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Number.isSafeInteger(value) ? value.toFixed(0) : String(value);
+  }
+  if (value == null) return "";
+  return String(value).trim();
 }
 
-export function applyMapping(rows: Record<string, string>[], mapping: FieldMapping): LeadRowInput[] {
+export function applyMapping(rows: Record<string, unknown>[], mapping: FieldMapping): LeadRowInput[] {
   return rows.map((row) => {
     const out: Partial<LeadRowInput> = {};
     for (const field of IMPORT_FIELDS) {
-      if (field.key === "email") continue;
+      if (field.key === "email" || field.key === "phone") continue;
       const value = cell(row, mapping[field.key]);
       if (value) out[field.key] = value;
     }
     const email = cell(row, mapping.email) || cell(row, mapping.email_fallback);
     if (email) out.email = email;
+    const phone = usablePhone(cell(row, mapping.phone)) || usablePhone(cell(row, mapping.phone_fallback));
+    if (phone) out.phone = phone;
     return out as LeadRowInput;
   });
 }

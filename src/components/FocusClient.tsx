@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
-import { joinEmailDraft, splitEmailDraft } from "@/server/cadence";
+import { splitEmailDraft } from "@/server/cadence";
 import { cadenceChannel, cardInRepQueue, focusWorkingChannel, matchesFocusFilter } from "@/lib/focusQueue";
 import { focusObjections, resolveFocusOpener, type ScriptRating } from "@/lib/focusScripts";
-import { gmailComposeUrl, linkedinOpenUrl } from "@/lib/outreachLinks";
+import { linkedinOpenUrl, mailtoUrl } from "@/lib/outreachLinks";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel, TouchOutcome, LeadSource } from "@prisma/client";
@@ -211,7 +211,7 @@ export function FocusClient({
     return () => clearInterval(t);
   }, [started, sessionLengthSeconds]);
 
-  const draftText = emailParts ? joinEmailDraft(emailParts.subject, emailParts.body) : opener?.text ?? "";
+  const draftText = emailParts ? emailParts.body : opener?.text ?? "";
 
   function copy() {
     if (!draftText) return;
@@ -319,7 +319,7 @@ export function FocusClient({
             <p className="section-label mb-2">Focus</p>
             <h2 className="page-title m-0">Who are you working?</h2>
             <p className="text-sm text-muted mt-2 mb-0">
-              Call is every lead of yours with a phone. Email and LinkedIn follow the cadence step.
+              Call is every lead of yours with a phone. LinkedIn is every lead in this queue. Email follows the cadence step.
             </p>
           </div>
           <div className="space-y-3">
@@ -491,7 +491,7 @@ export function FocusClient({
 
   const askFor = current.lead.contactName?.trim() || "the owner";
   const place = [current.lead.businessName, current.lead.city].filter(Boolean).join(" · ");
-  const gmailHref = current.lead.email && emailParts ? gmailComposeUrl(current.lead.email, emailParts.subject, emailParts.body) : null;
+  const mailtoHref = current.lead.email && emailParts ? mailtoUrl(current.lead.email, emailParts.subject, emailParts.body) : null;
   const linkedinHref = channel === "linkedin" ? linkedinOpenUrl(current.lead) : null;
 
   return (
@@ -539,14 +539,12 @@ export function FocusClient({
               >
                 {copied ? "Copied" : "Copy draft"}
               </button>
-              {gmailHref ? (
+              {mailtoHref ? (
                 <a
-                  href={gmailHref}
-                  target="_blank"
-                  rel="noreferrer"
+                  href={mailtoHref}
                   className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
                 >
-                  Open Gmail
+                  Open in Titan
                 </a>
               ) : (
                 <p className="text-sm text-stop m-0">No email on file.</p>

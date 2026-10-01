@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { autoDetailingStarter } from "@/lib/playbooks/autoDetailing";
 import { resolveFocusOpener } from "@/lib/focusScripts";
-import { gmailComposeUrl, linkedinOpenUrl } from "@/lib/outreachLinks";
+import { linkedinOpenUrl, mailtoUrl } from "@/lib/outreachLinks";
 
 describe("auto-detailing starter playbook", () => {
   it("uses detailing ICP and openers, not restaurant copy", () => {
@@ -37,16 +37,27 @@ describe("auto-detailing starter playbook", () => {
 });
 
 describe("outreach links", () => {
-  it("opens Gmail compose and LinkedIn without a send action", () => {
-    const gmail = gmailComposeUrl("a@b.com", "Hello", "Body line");
-    expect(gmail.startsWith("https://mail.google.com/mail/?")).toBe(true);
-    expect(gmail).toContain("view=cm");
-    expect(gmail).not.toContain("send");
+  it("opens Titan through mailto and LinkedIn without a send or invite note", () => {
+    const mail = mailtoUrl("a@b.com", "Hello there", "Line one\nLine two");
+    expect(mail.startsWith("mailto:a@b.com?subject=")).toBe(true);
+    expect(mail).toContain("subject=Hello%20there");
+    expect(mail).toContain("body=Line%20one%0ALine%20two");
+    expect(mail).not.toContain("mail.google.com");
+    expect(mail).not.toContain("%40");
+    expect(mail).not.toMatch(/[?&]send=/);
+
     expect(linkedinOpenUrl({ linkedinUrl: "https://www.linkedin.com/in/sam", businessName: "Shine" })).toBe(
       "https://www.linkedin.com/in/sam",
     );
     const search = linkedinOpenUrl({ contactName: "Sam", businessName: "Shine Shop", linkedinUrl: null });
     expect(search.startsWith("https://www.linkedin.com/search/results/people/?keywords=")).toBe(true);
     expect(search).not.toContain("/messaging/send");
+    expect(search).not.toMatch(/[?&](message|body)=/i);
+    const company = linkedinOpenUrl({
+      linkedinUrl: "https://www.linkedin.com/company/shine",
+      contactName: "Sam",
+      businessName: "Shine Shop",
+    });
+    expect(company.startsWith("https://www.linkedin.com/search/results/people/?keywords=")).toBe(true);
   });
 });

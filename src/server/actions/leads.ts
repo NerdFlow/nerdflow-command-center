@@ -6,7 +6,9 @@ import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
 import { incrementMetricCount } from "@/server/targets";
-import { computeDedupeKey, ruleScore, type LeadRowInput } from "@/server/leads";
+import { ruleScore, type LeadRowInput } from "@/server/leads";
+import { usablePhone } from "@/lib/importMap";
+import { planImportMerge } from "@/lib/phoneBackfill";
 import { extractSiteContact } from "@/server/leadgen/extract";
 import { scoreLead } from "@/server/leadgen/score";
 import { campaignStrategySchema } from "@/server/strategy";
@@ -124,34 +126,79 @@ const rowSchema = z.object({
   linkedin_url: z.string().optional(),
 });
 
-export async function previewLeadImport(campaignId: string, rawRows: LeadRowInput[]) {
-  const user = await requireUser();
-  const rows = rawRows.map((r) => rowSchema.parse(r));
+function normalizeImportRow(row: LeadRowInput): LeadRowInput {
+  const phone = usablePhone(row.phone);
+  if (!phone) {
+    const { phone: _drop, ...rest } = row;
+    return rest;
+  }
+  return { ...row, phone };
+}
+
+async function classifyImport(organizationId: string, campaignId: string, rawRows: LeadRowInput[]) {
+  const rows = rawRows.map((r) => normalizeImportRow(rowSchema.parse(r)));
+  const campaignLeads = await prisma.lead.findMany({
+    where: { organizationId, campaignId },
+    select: { id: true, businessName: true, city: true, website: true, phone: true, dedupeKey: true },
+  });
+  const plan = planImportMerge(campaignLeads, rows);
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 180);
 
   const results = [];
-  for (const row of rows) {
-    const dedupeKey = computeDedupeKey(row);
-    const existing = await prisma.lead.findFirst({
-      where: {
-        organizationId: user.organizationId,
-        dedupeKey,
-        OR: [
-          { createdAt: { gte: cutoff } },
-          { status: "do_not_contact" },
-          { deals: { some: { stage: { notIn: ["won", "lost"] } } } },
-        ],
-      },
+  for (const item of plan) {
+    let isDuplicate = item.action !== "insert";
+    if (item.action === "insert") {
+      const existing = await prisma.lead.findFirst({
+        where: {
+          organizationId,
+          dedupeKey: item.dedupeKey,
+          OR: [
+            { createdAt: { gte: cutoff } },
+            { status: "do_not_contact" },
+            { deals: { some: { stage: { notIn: ["won", "lost"] } } } },
+          ],
+        },
+      });
+      isDuplicate = Boolean(existing);
+    }
+    results.push({
+      row: item.row,
+      dedupeKey: item.dedupeKey,
+      isDuplicate,
+      willBackfillPhone: item.action === "backfill_phone",
+      backfillLeadId: item.action === "backfill_phone" ? item.leadId : null,
+      backfillPhone: item.action === "backfill_phone" ? item.phone : null,
+      score: ruleScore(item.row),
     });
-    results.push({ row, dedupeKey, isDuplicate: Boolean(existing), score: ruleScore(row) });
   }
 
   return {
     total: results.length,
     duplicates: results.filter((r) => r.isDuplicate).length,
+    phonesBackfilled: results.filter((r) => r.willBackfillPhone).length,
     rows: results,
   };
+}
+
+export async function previewLeadImport(campaignId: string, rawRows: LeadRowInput[]) {
+  const user = await requireUser();
+  return classifyImport(user.organizationId, campaignId, rawRows);
+}
+
+async function writePhoneBackfill(
+  rows: { willBackfillPhone: boolean; backfillLeadId: string | null; backfillPhone: string | null }[],
+) {
+  const updates = rows.filter((r) => r.willBackfillPhone && r.backfillLeadId && r.backfillPhone);
+  await Promise.all(
+    updates.map((r) =>
+      prisma.lead.update({
+        where: { id: r.backfillLeadId! },
+        data: { phone: r.backfillPhone! },
+      }),
+    ),
+  );
+  return updates.length;
 }
 
 export async function commitLeadImport(campaignId: string, rawRows: LeadRowInput[]) {
@@ -163,6 +210,7 @@ export async function commitLeadImport(campaignId: string, rawRows: LeadRowInput
 
   const preview = await previewLeadImport(campaignId, rawRows);
   const toInsert = preview.rows.filter((r) => !r.isDuplicate);
+  const phonesBackfilled = await writePhoneBackfill(preview.rows);
 
   const runRecord = await prisma.leadSourceRun.create({
     data: {
@@ -213,11 +261,12 @@ export async function commitLeadImport(campaignId: string, rawRows: LeadRowInput
     action: "lead_csv_import",
     entityType: "campaign",
     entityId: campaignId,
-    after: { imported: toInsert.length, duplicates: preview.duplicates, total: rawRows.length },
+    after: { imported: toInsert.length, duplicates: preview.duplicates, phonesBackfilled, total: rawRows.length },
   });
 
   revalidatePath("/leads");
-  return { imported: toInsert.length, duplicates: preview.duplicates, total: rawRows.length };
+  revalidatePath("/focus");
+  return { imported: toInsert.length, duplicates: preview.duplicates, phonesBackfilled, total: rawRows.length };
 }
 
 /**
@@ -249,6 +298,7 @@ export async function commitBulkImport(input: {
 
   const preview = await previewLeadImport(input.campaignId, input.rawRows);
   const toInsert = preview.rows.filter((r) => !r.isDuplicate);
+  const phonesBackfilled = await writePhoneBackfill(preview.rows);
   const missingContact = toInsert.filter((r) => !r.row.email && !r.row.phone).length;
 
   const runRecord = await prisma.leadSourceRun.create({
@@ -263,7 +313,7 @@ export async function commitBulkImport(input: {
       new: toInsert.length,
       duplicates: preview.duplicates,
       rejectedAuto: 0,
-      narration: `Import: ${input.fileName}`,
+      narration: `Import: ${input.fileName}${phonesBackfilled ? ` · ${phonesBackfilled} phones added to existing leads` : ""}`,
     },
   });
 
@@ -309,7 +359,13 @@ export async function commitBulkImport(input: {
     action: "lead_bulk_import",
     entityType: "campaign",
     entityId: input.campaignId,
-    after: { imported: toInsert.length, duplicates: preview.duplicates, total: input.rawRows.length, fileName: input.fileName },
+    after: {
+      imported: toInsert.length,
+      duplicates: preview.duplicates,
+      phonesBackfilled,
+      total: input.rawRows.length,
+      fileName: input.fileName,
+    },
   });
 
   revalidatePath("/focus");
@@ -320,7 +376,14 @@ export async function commitBulkImport(input: {
   // Detached on purpose — never await this. The import is done and usable now.
   void backgroundEnrichImportedLeads(createdLeadIds, input.campaignId, user.organizationId, runRecord.id).catch(() => {});
 
-  return { imported: toInsert.length, duplicates: preview.duplicates, total: input.rawRows.length, missingContact, runId: runRecord.id };
+  return {
+    imported: toInsert.length,
+    duplicates: preview.duplicates,
+    phonesBackfilled,
+    total: input.rawRows.length,
+    missingContact,
+    runId: runRecord.id,
+  };
 }
 
 async function backgroundEnrichImportedLeads(leadIds: string[], campaignId: string, organizationId: string, runId: string) {
