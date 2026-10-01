@@ -3,7 +3,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
-import { splitEmailDraft } from "@/server/cadence";
+import { completeTodayRow, skipTodayRow } from "@/server/actions/todayRows";
+import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
+import { FlowCoach } from "@/components/FlowCoach";
+import { ShapeASession } from "@/components/ShapeASession";
+import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
+import {
+  actionVisible,
+  expandShapeLead,
+  formatQueueClock,
+  orderActions,
+  pickerCounts,
+  skipKeysFromSignals,
+  todayActionKey,
+  type TodayAction,
+} from "@/lib/todayCards";
 import {
   dropCard,
   finishPending,
@@ -22,43 +36,9 @@ import { cadenceChannel, cardInRepQueue, focusWorkingChannel, matchesFocusFilter
 import { callPlaceholderName, resolveFocusObjections, resolveFocusOpener, type ScriptRating } from "@/lib/focusScripts";
 import { linkedinOpenUrl, mailtoUrl } from "@/lib/outreachLinks";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
-import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel, TouchOutcome, LeadSource } from "@prisma/client";
 
-type Card = {
-  lead: {
-    id: string;
-    businessName: string;
-    contactName: string | null;
-    contactRole: string | null;
-    city: string | null;
-    region: string | null;
-    country: string | null;
-    cadenceStep: number;
-    nextChannelOverride: Channel | null;
-    signals: Record<string, unknown>;
-    phone: string | null;
-    email: string | null;
-    instagramUrl: string | null;
-    linkedinUrl: string | null;
-    website: string | null;
-    sourceUrl: string | null;
-    fitScore: number;
-    fitReasons: string[];
-    fitFlags: string[];
-    source: LeadSource;
-    lastTouchLabel: string | null;
-  };
-  campaign: { id: string; name: string; productName: string; strategy: CampaignStrategy };
-  label: string;
-};
-
-const CHANNEL_LABEL: Record<Channel, string> = {
-  email: "Email",
-  call: "Call",
-  instagram: "Instagram DM",
-  linkedin: "LinkedIn DM",
-};
+type Card = ShapeCard;
 
 const SOURCE_LABEL: Partial<Record<LeadSource, string>> = {
   google_places: "Google Places",
@@ -136,15 +116,24 @@ export function FocusClient({
   repTimezone,
   allowedChannels,
   initialChannel,
+  coachLeads = [],
+  assistantName = "Flow",
 }: {
   initialCards: Card[];
   me: string;
   repTimezone: string;
   allowedChannels: Channel[];
   initialChannel?: Channel | "all";
+  coachLeads?: CoachDirectoryLead[];
+  assistantName?: string;
 }) {
   const router = useRouter();
-  const [cards, setCards] = useState(() => initialCards.filter((c) => cardInRepQueue(c, allowedChannels)));
+  const [cards, setCards] = useState(() => initialCards.filter((c) => c.replyOnly || cardInRepQueue(c, allowedChannels)));
+  const [hiddenKeys, setHiddenKeys] = useState<string[]>([]);
+  const [deferredKeys, setDeferredKeys] = useState<string[]>(() => initialCards.flatMap((card) => skipKeysFromSignals(card.lead.signals)));
+  const [pinnedKeys, setPinnedKeys] = useState<string[]>([]);
+  const [coachOpen, setCoachOpen] = useState(false);
+  const shapeInFlight = useRef(new Set<string>());
   const [channelFilter, setChannelFilter] = useState<Channel | "all">(() => {
     if (initialChannel && initialChannel !== "all" && allowedChannels.includes(initialChannel)) return initialChannel;
     if (initialChannel === "all") return "all";
@@ -175,6 +164,47 @@ export function FocusClient({
       linkedin: count("linkedin"),
     };
   }, [cards, businessHoursOnly, repTimezone, sourceFilter]);
+
+  const shapeRows = useMemo(() => {
+    const hidden = new Set(hiddenKeys);
+    const expanded = cards.flatMap((card) => {
+      if (sourceFilter !== "all" && card.lead.source !== sourceFilter) return [];
+      const callAllowedNow = !businessHoursOnly || leadLocalTimeStatus(card.lead, repTimezone).inBusinessHours;
+      return expandShapeLead(
+        {
+          id: card.lead.id,
+          phone: card.lead.phone,
+          email: card.lead.email,
+          linkedinUrl: card.lead.linkedinUrl,
+          instagramUrl: card.lead.instagramUrl,
+          contactName: card.lead.contactName,
+          cadenceStep: card.lead.cadenceStep,
+          nextChannelOverride: card.lead.nextChannelOverride,
+          signals: card.lead.signals,
+          strategy: card.campaign.strategy,
+          linkedinRequestSent: card.linkedinRequestSent,
+          openReplies: card.openReplies,
+          replyOnly: card.replyOnly,
+          callAllowedNow,
+        },
+        allowedChannels,
+      )
+        .filter((action) => !hidden.has(action.key))
+        .map((action) => ({ action, card }));
+    });
+    const ordered = orderActions(
+      expanded.map((row) => row.action),
+      deferredKeys,
+      pinnedKeys,
+    );
+    const byKey = new Map(expanded.map((row) => [row.action.key, row]));
+    return ordered.flatMap((action) => {
+      const row = byKey.get(action.key);
+      return row ? [row] : [];
+    });
+  }, [cards, sourceFilter, businessHoursOnly, repTimezone, allowedChannels, hiddenKeys, deferredKeys, pinnedKeys]);
+
+  const shapeCounts = useMemo(() => pickerCounts(shapeRows.map((row) => row.action)), [shapeRows]);
 
   const visibleCards = useMemo(
     () => selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone),
@@ -249,7 +279,7 @@ export function FocusClient({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!started || !current) return;
+      if (!started || channelFilter !== "call" || !current) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
       const match = outcomes.find((o) => o.key === e.key);
       if (match) handleOutcome(match.outcome);
@@ -260,11 +290,15 @@ export function FocusClient({
     return () => window.removeEventListener("keydown", onKey);
     // handleOutcome closes over the current card and the note; rebind when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, current, outcomes, draftText, callNote, opener, channel]);
+  }, [started, channelFilter, current, outcomes, draftText, callNote, opener, channel]);
 
   function startSession(ch: Channel | "all") {
     if (ch !== "all") setChannelFilter(ch);
-    setSessionTotal(selectFocusCards(cards, ch, sourceFilter, businessHoursOnly, repTimezone).length);
+    const total =
+      ch === "call"
+        ? selectFocusCards(cards, "call", sourceFilter, businessHoursOnly, repTimezone).length
+        : shapeRows.filter((row) => actionVisible(row.action, ch)).length;
+    setSessionTotal(total);
     setTouchesLogged(0);
     setConversations(0);
     setSecondsLeft(sessionLengthSeconds ?? 0);
@@ -281,6 +315,95 @@ export function FocusClient({
       if (item) copyCards.push(item);
       return copyCards;
     });
+  }
+
+  function shapeRowsFor(filter: Channel | "all") {
+    return shapeRows.filter((row) => actionVisible(row.action, filter));
+  }
+
+  function handleShapeSkip(row: { action: TodayAction; card: Card }) {
+    const key = row.action.key;
+    setDeferredKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    setError(null);
+    void skipTodayRow({ leadId: row.card.lead.id, actionKey: key, kind: row.action.kind }).catch((err: unknown) => {
+      setDeferredKeys((prev) => prev.filter((item) => item !== key));
+      setError(err instanceof Error ? err.message : "Couldn't skip that row.");
+    });
+  }
+
+  function handleShapeDone(row: { action: TodayAction; card: Card }, script?: { variant: "a" | "b"; scriptId: string }) {
+    if (row.action.kind === "call") return;
+    const key = row.action.key;
+    if (shapeInFlight.current.has(key)) return;
+    shapeInFlight.current.add(key);
+    setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    setError(null);
+    setTouchesLogged((n) => n + 1);
+    const cadenceNow = resolveLeadChannel({
+      strategy: row.card.campaign.strategy,
+      cadenceStep: row.card.lead.cadenceStep,
+      nextChannelOverride: row.card.lead.nextChannelOverride,
+    });
+    void completeTodayRow({
+      leadId: row.card.lead.id,
+      kind: row.action.kind,
+      replyId: row.action.replyId ?? undefined,
+      scriptUsed: script?.variant,
+      scriptId: script?.scriptId,
+      advanceCadence: row.action.kind === "linkedin_request" ? cadenceNow === "linkedin" : undefined,
+    })
+      .then((res) => {
+        if (res.touchId && row.action.kind === "send_email") {
+          setPendingRating({ touchId: res.touchId, businessName: row.card.lead.businessName });
+        }
+      })
+      .catch((err: unknown) => {
+        setHiddenKeys((prev) => prev.filter((item) => item !== key));
+        setTouchesLogged((n) => Math.max(0, n - 1));
+        setError(err instanceof Error ? err.message : "Couldn't log that — it's back on this card.");
+      })
+      .finally(() => {
+        shapeInFlight.current.delete(key);
+      });
+  }
+
+  function handleShapeCall(
+    row: { action: TodayAction; card: Card },
+    outcome: TouchOutcome,
+    note: string | null,
+    script: { variant: "a" | "b"; scriptId: string },
+  ) {
+    const key = row.action.key;
+    const leadId = row.card.lead.id;
+    if (!startOptimisticOutcome(inFlight.current, key)) return;
+    const terminal = outcome === "not_fit" || outcome === "wrong_number";
+    const siblingKeys = shapeRows.filter((item) => item.card.lead.id === leadId).map((item) => item.action.key);
+    setHiddenKeys((prev) => Array.from(new Set([...prev, ...(terminal ? siblingKeys : [key])])));
+    setError(null);
+    setTouchesLogged((n) => n + 1);
+    const countsAsConversation = outcome === "replied" || outcome === "interested" || outcome === "meeting_booked";
+    if (countsAsConversation) setConversations((n) => n + 1);
+    void logTouchOutcome({
+      leadId,
+      channel: "call",
+      outcome,
+      scriptUsed: script.variant,
+      scriptId: script.scriptId,
+      callerNote: note ?? undefined,
+    })
+      .then((res) => {
+        if (res.touchId) setPendingRating({ touchId: res.touchId, businessName: row.card.lead.businessName });
+        if ((outcome === "interested" || outcome === "meeting_booked") && res.dealId) router.refresh();
+      })
+      .catch((err: unknown) => {
+        setHiddenKeys((prev) => prev.filter((item) => !(terminal ? siblingKeys : [key]).includes(item)));
+        setTouchesLogged((n) => Math.max(0, n - 1));
+        if (countsAsConversation) setConversations((n) => Math.max(0, n - 1));
+        setError(err instanceof Error ? err.message : "Couldn't log that outcome — it's back on this card.");
+      })
+      .finally(() => {
+        inFlight.current.delete(key);
+      });
   }
 
   function handleOutcome(outcome: TouchOutcome) {
@@ -345,57 +468,52 @@ export function FocusClient({
   }
 
   if (!started) {
-    const channelTiles: { channel: Channel; label: string; count: number }[] = (
-      [
-        { channel: "call" as const, label: "Call", count: countByChannel.call },
-        { channel: "email" as const, label: "Email", count: countByChannel.email },
-        { channel: "linkedin" as const, label: "LinkedIn", count: countByChannel.linkedin },
-        { channel: "instagram" as const, label: "Instagram DM", count: countByChannel.instagram },
-      ]
-    ).filter((t) => allowedChannels.includes(t.channel));
-
     return (
       <div className="flex-1 flex items-center justify-center p-6 md:p-10">
         <div className="w-full max-w-lg space-y-7 animate-fade-up">
           <div>
-            <p className="section-label mb-2">Focus</p>
+            <p className="section-label mb-2">Today</p>
             <h2 className="page-title m-0">Who are you working?</h2>
             <p className="text-sm text-muted mt-2 mb-0">
-              Call is every lead of yours with a phone. LinkedIn is every lead in this queue. Email follows the cadence step.
+              One card = one Today row. Email opens Titan. LinkedIn request = Connect with no note.
             </p>
           </div>
-          <div className="space-y-3">
-            <p className="section-label mb-0">Channel</p>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                { channel: "all" as const, label: "Everything", count: shapeCounts.all },
+                { channel: "email" as const, label: "Email", count: shapeCounts.email },
+                { channel: "linkedin" as const, label: "LinkedIn", count: shapeCounts.linkedin },
+                { channel: "call" as const, label: "Call", count: allowedChannels.includes("call") ? countByChannel.call : 0 },
+              ] as const
+            ).map((tile) => (
               <button
                 type="button"
-                onClick={() => setChannelFilter("all")}
+                key={tile.channel}
+                onClick={() => setChannelFilter(tile.channel)}
+                disabled={tile.count === 0}
                 className={
-                  "flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all " +
-                  (channelFilter === "all" ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
+                  "flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all disabled:opacity-40 " +
+                  (channelFilter === tile.channel ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
                 }
               >
-                <span>Everything</span>
-                <span className="font-bold text-accent tabular-nums text-lg">
-                  {selectFocusCards(cards, "all", sourceFilter, businessHoursOnly, repTimezone).length}
-                </span>
+                <span>{tile.label}</span>
+                <span className="font-bold text-accent tabular-nums text-lg">{tile.count}</span>
               </button>
-              {channelTiles.map(({ channel: ch, label, count }) => (
-                <button
-                  type="button"
-                  key={ch}
-                  onClick={() => setChannelFilter(ch)}
-                  disabled={count === 0}
-                  className={
-                    "flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all disabled:opacity-40 " +
-                    (channelFilter === ch ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
-                  }
-                >
-                  <span>{label}</span>
-                  <span className="font-bold text-accent tabular-nums text-lg">{count}</span>
-                </button>
-              ))}
-            </div>
+            ))}
+            {shapeCounts.instagram > 0 && (
+              <button
+                type="button"
+                onClick={() => setChannelFilter("instagram")}
+                className={
+                  "col-span-2 flex items-center justify-between px-4 py-3.5 rounded-xl border text-sm font-medium transition-all " +
+                  (channelFilter === "instagram" ? "border-accent bg-accent-soft text-ink" : "border-rule bg-panel text-muted hover:text-ink")
+                }
+              >
+                <span>Instagram</span>
+                <span className="font-bold text-accent tabular-nums text-lg">{shapeCounts.instagram}</span>
+              </button>
+            )}
           </div>
           <div className="space-y-3">
             <p className="section-label mb-0">How long</p>
@@ -444,32 +562,111 @@ export function FocusClient({
               </select>
             </div>
           )}
-          <div className="flex gap-3 pt-1">
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             <button
               type="button"
               onClick={() => startSession(channelFilter)}
-              disabled={selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone).length === 0}
-              className="flex-1 bg-accent text-on-accent font-semibold py-3.5 rounded-xl hover:bg-accent-hover transition-colors disabled:opacity-40 text-[15px]"
+              disabled={
+                channelFilter === "call"
+                  ? countByChannel.call === 0
+                  : shapeRowsFor(channelFilter).length === 0
+              }
+              className="bg-accent text-on-accent font-semibold px-8 py-3 rounded-xl hover:bg-accent-hover transition-colors disabled:opacity-40 text-[15px]"
             >
               Start
+            </button>
+            <button type="button" onClick={() => setCoachOpen(true)} className="text-sm font-medium text-accent px-2 py-3">
+              Tell Flow what happened
             </button>
             <button
               type="button"
               onClick={() => router.push("/today")}
-              className="px-5 py-3.5 text-muted rounded-xl hover:text-ink transition-colors text-sm"
+              className="px-3 py-3 text-muted rounded-xl hover:text-ink transition-colors text-sm"
             >
               Cancel
             </button>
           </div>
         </div>
+        {coachOpen && (
+          <FlowCoach
+            assistantName={assistantName}
+            leads={coachLeads}
+            onClose={() => setCoachOpen(false)}
+            onLogged={(result) => {
+              setCards((prev) => {
+                const idx = prev.findIndex((card) => card.lead.id === result.leadId);
+                const reply = result.card.openReplies[0];
+                if (!reply) return prev;
+                if (idx === -1) return [...prev, result.card];
+                const next = [...prev];
+                const card = next[idx]!;
+                if (card.openReplies.some((item) => item.id === reply.id)) return prev;
+                next[idx] = { ...card, openReplies: [...card.openReplies, reply] };
+                return next;
+              });
+              setPinnedKeys((prev) => [todayActionKey(result.leadId, "reply", result.replyId), ...prev]);
+            }}
+          />
+        )}
       </div>
+    );
+  }
+
+  if (channelFilter !== "call") {
+    const clock = formatQueueClock(new Date(), repTimezone);
+    return (
+      <>
+        <ShapeASession
+          rows={shapeRowsFor(channelFilter)}
+          me={me}
+          repTimezone={repTimezone}
+          clock={clock}
+          touchesLogged={touchesLogged}
+          sessionTotal={sessionTotal}
+          secondsLeft={secondsLeft}
+          sessionLengthSeconds={sessionLengthSeconds}
+          conversations={conversations}
+          businessHoursOnly={businessHoursOnly}
+          onToggleHours={setBusinessHoursOnly}
+          showHours={channelFilter === "all"}
+          error={error}
+          pendingRating={pendingRating}
+          onRate={(rating) => void rate(rating)}
+          onDismissRating={() => setPendingRating(null)}
+          onEnd={endSession}
+          onOpenCoach={() => setCoachOpen(true)}
+          onDone={handleShapeDone}
+          onSkip={handleShapeSkip}
+          onCallOutcome={handleShapeCall}
+        />
+        {coachOpen && (
+          <FlowCoach
+            assistantName={assistantName}
+            leads={coachLeads}
+            onClose={() => setCoachOpen(false)}
+            onLogged={(result) => {
+              setCards((prev) => {
+                const idx = prev.findIndex((card) => card.lead.id === result.leadId);
+                const reply = result.card.openReplies[0];
+                if (!reply) return prev;
+                if (idx === -1) return [...prev, result.card];
+                const next = [...prev];
+                const card = next[idx]!;
+                if (card.openReplies.some((item) => item.id === reply.id)) return prev;
+                next[idx] = { ...card, openReplies: [...card.openReplies, reply] };
+                return next;
+              });
+              setPinnedKeys((prev) => [todayActionKey(result.leadId, "reply", result.replyId), ...prev]);
+            }}
+          />
+        )}
+      </>
     );
   }
 
   const mins = sessionLengthSeconds === null ? null : Math.floor(secondsLeft / 60);
   const secs = sessionLengthSeconds === null ? null : String(secondsLeft % 60).padStart(2, "0");
-  const sessionTitle =
-    channelFilter === "all" ? "All channels" : channelFilter === "call" ? "Calls" : channelFilter === "email" ? "Emails" : CHANNEL_LABEL[channelFilter];
+  const sessionTitle = "Calls";
 
   const topBar = (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0 z-10">
@@ -482,12 +679,10 @@ export function FocusClient({
         )}
       </div>
       <div className="flex items-center gap-3 md:gap-4 flex-wrap">
-        {channelFilter === "call" || channelFilter === "all" ? (
-          <label className="hidden sm:flex items-center gap-1.5 cursor-pointer">
-            <input type="checkbox" checked={businessHoursOnly} onChange={(e) => setBusinessHoursOnly(e.target.checked)} className="accent-[var(--accent)]" />
-            <span className="text-xs text-dim">Their hours only</span>
-          </label>
-        ) : null}
+        <label className="hidden sm:flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={businessHoursOnly} onChange={(e) => setBusinessHoursOnly(e.target.checked)} className="accent-[var(--accent)]" />
+          <span className="text-xs text-dim">Their hours only</span>
+        </label>
         <span className="text-sm">
           <span className="font-bold text-ink tabular-nums text-base">{touchesLogged}</span>
           <span className="text-dim"> / {sessionTotal}</span>

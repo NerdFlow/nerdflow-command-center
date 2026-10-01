@@ -1,56 +1,25 @@
 import { requireUser } from "@/server/auth";
-import { getQueueForUser } from "@/server/queue";
-import { formatLastTouch } from "@/lib/focusCallCard";
+import { getOrgSettings } from "@/server/settings";
+import { loadFocusBoard } from "@/server/todayBoard";
 import { FocusClient } from "@/components/FocusClient";
-import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel } from "@prisma/client";
 
 const CHANNELS: Channel[] = ["call", "email", "instagram", "linkedin"];
 
 export default async function FocusPage({ searchParams }: { searchParams: { channel?: string } }) {
   const user = await requireUser();
-  const queue = await getQueueForUser(user.id, 50);
+  const [board, settings] = await Promise.all([loadFocusBoard(user.id, user.organizationId), getOrgSettings()]);
   const allowedChannels = ((user.channelsWorked as string[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
   const raw = searchParams.channel;
   const initialChannel: Channel | "all" | undefined =
     raw === "all" ? "all" : raw && CHANNELS.includes(raw as Channel) ? (raw as Channel) : undefined;
-
-  const cards = queue.map(({ lead, campaign, label }) => ({
-    lead: {
-      id: lead.id,
-      businessName: lead.businessName,
-      contactName: lead.contactName,
-      contactRole: lead.contactRole,
-      city: lead.city,
-      region: lead.region,
-      country: lead.country,
-      cadenceStep: lead.cadenceStep,
-      nextChannelOverride: lead.nextChannelOverride,
-      signals: lead.signals as Record<string, unknown>,
-      phone: lead.phone,
-      email: lead.email,
-      instagramUrl: lead.instagramUrl,
-      linkedinUrl: lead.linkedinUrl,
-      website: lead.website,
-      sourceUrl: lead.sourceUrl,
-      fitScore: lead.fitScore,
-      fitReasons: (lead.fitReasons as string[] | null) ?? [],
-      fitFlags: (lead.fitFlags as string[] | null) ?? [],
-      source: lead.source,
-      lastTouchLabel: formatLastTouch(lead.touches[0] ?? null),
-    },
-    campaign: {
-      id: campaign.id,
-      name: campaign.name,
-      productName: campaign.product.name,
-      strategy: campaign.strategy as unknown as CampaignStrategy,
-    },
-    label,
-  }));
+  const assistantName = settings.assistantName === "Sales Pipeline" ? "Flow" : settings.assistantName || "Flow";
 
   return (
     <FocusClient
-      initialCards={cards}
+      initialCards={board.cards}
+      coachLeads={board.coachLeads}
+      assistantName={assistantName}
       me={user.fullName}
       repTimezone={user.timezone}
       allowedChannels={allowedChannels}
