@@ -16,6 +16,7 @@ import {
 } from "@/server/actions/campaigns";
 import { addKnowledgeDocPaste, deleteKnowledgeDoc } from "@/server/actions/knowledge";
 import { LeadGenRunner } from "@/components/LeadGenRunner";
+import { ScriptsPanel } from "@/components/ScriptsPanel";
 import type { Channel, CampaignNoteKind, CampaignStatus, LeadSource } from "@prisma/client";
 
 const CHANNELS: Channel[] = ["email", "call", "instagram", "linkedin"];
@@ -133,6 +134,7 @@ export function CampaignDetail({
           { key: "overview", label: "Overview" },
           { key: "icp", label: "ICP and lead gen" },
           { key: "playbook", label: "Playbook" },
+          { key: "scripts", label: "Scripts" },
           { key: "knowledge", label: "Knowledge" },
           { key: "log", label: "Log" },
         ]}
@@ -284,6 +286,19 @@ export function CampaignDetail({
             </Btn>
           )}
         </div>
+      )}
+
+      {tab === "scripts" && (
+        <ScriptsPanel
+          strategy={strategy}
+          productName={campaign.productName}
+          canManage={canManage}
+          onChange={update}
+          onSave={save}
+          dirty={dirty}
+          saving={saving}
+          saveError={saveError}
+        />
       )}
 
       {tab === "playbook" && (
@@ -646,30 +661,10 @@ function PlaybookEditor({
       </Panel>
 
       <Panel>
-        <h3 className="text-sm font-medium mb-1">Call scripts</h3>
-        <p className="text-xs text-muted mb-3 m-0">
-          Two openers for Focus. Reps pick which one they used and thumbs up or down — no AI, just data for What&apos;s Working.
+        <h3 className="text-sm font-medium mb-1">Scripts</h3>
+        <p className="text-sm text-muted m-0">
+          Call and email A/B openers live on the Scripts tab. Focus assigns one. This playbook does not ask the rep to pick.
         </p>
-        {(["a", "b"] as const).map((letter, idx) => (
-          <label key={letter} className="block text-xs text-muted mb-3">
-            Script {letter.toUpperCase()}
-            <textarea
-              className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg mt-1 text-sm"
-              rows={3}
-              disabled={!canManage}
-              placeholder={letter === "a" ? "Hi {name}, this is {me} from {product}…" : "Optional second opener to try"}
-              value={strategy.call_scripts?.[idx] ?? ""}
-              onChange={(e) =>
-                onChange((s) => {
-                  const next: [string, string] = [s.call_scripts?.[0] ?? "", s.call_scripts?.[1] ?? ""];
-                  next[idx] = e.target.value;
-                  return { ...s, call_scripts: next };
-                })
-              }
-            />
-          </label>
-        ))}
-        <p className="text-xs text-muted m-0">Placeholders: {"{name} {biz} {city} {me} {product}"}</p>
       </Panel>
 
       <Panel>

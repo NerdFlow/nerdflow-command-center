@@ -69,6 +69,10 @@ const receptAiStrategy: CampaignStrategy = {
     score_boost: ["Reviews mention missed calls", "Instagram post in the last 14 days"],
   },
   kill_rule: "Pause at 150 touches if reply rate is under 1% or bounce rate is over 5%.",
+  email_scripts: [
+    "Subject: We called {biz} on Friday\n\nHi {name},\n\nWe called {biz} during Friday dinner rush and nobody could pick up. Not a criticism — your team was clearly busy.\n\nReceptAI answers every call, takes the order or reservation, and sends it straight to you. Want the missed-call audit?\n\n{me}",
+    "Subject: Re: {biz} Friday calls\n\nHi {name},\n\nOne number I should have led with: every missed call at rush hour is usually a lost order. Worth a 10-minute look?\n\n{me}",
+  ],
   call_scripts: [
     "Hi, is this {name}? This is {me} from ReceptAI.\n\nI called {biz} a few times Friday around dinner and couldn't get through. Totally normal when the kitchen's slammed, but those are usually orders going to the place down the street.\n\nWe set up an AI that picks up every call, takes the order or booking, and sends it to you. Could I show you what it would have caught last Friday? Ten minutes.",
     "Hi {name}, {me} from ReceptAI. Quick question — when the dinner rush hits at {biz}, who picks up if the floor is slammed? We help restaurants stop losing those calls. Got two minutes?",

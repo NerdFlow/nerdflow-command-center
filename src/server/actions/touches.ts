@@ -26,11 +26,13 @@ export async function logTouchOutcome(params: {
   /** Required for outcome "meeting_booked". */
   meetingAt?: string;
   meetingNote?: string;
-  /** Call Focus: which script the rep said ("a" | "b"). Optional — never blocks the outcome. */
+  /** Variant Focus assigned ("a" | "b"). The rep does not pick. */
   scriptUsed?: "a" | "b";
-  /** Call Focus: thumbs on that script. */
-  scriptRating?: "up" | "down";
-  /** Call Focus: what the caller said, in the rep's words. */
+  /** Channel + variant, e.g. call_a or email_b. */
+  scriptId?: string;
+  /** Optional rating after the outcome. Skippable. */
+  scriptRating?: "up" | "down" | "helpful" | "meh" | "bad";
+  /** What the caller said, in the rep's words. */
   callerNote?: string;
 }) {
   const user = await requireUser();
@@ -120,7 +122,9 @@ export async function logTouchOutcome(params: {
     return null;
   }
 
-  const [, , dealId] = await Promise.all([
+  const scriptUsed = params.scriptUsed ?? null;
+  const scriptId = params.scriptId ?? (scriptUsed ? `${params.channel}_${scriptUsed}` : null);
+  const [touch, , dealId] = await Promise.all([
     prisma.touch.create({
       data: {
         organizationId: user.organizationId,
@@ -130,13 +134,10 @@ export async function logTouchOutcome(params: {
         step,
         outcome: params.outcome,
         occurredAt: now,
-        ...(params.channel === "call"
-          ? {
-              scriptUsed: params.scriptUsed ?? null,
-              scriptRating: params.scriptRating ?? null,
-              callerNote: params.callerNote?.trim() || null,
-            }
-          : {}),
+        scriptUsed,
+        scriptId,
+        scriptRating: params.scriptRating ?? null,
+        callerNote: params.callerNote?.trim() || null,
       },
     }),
     incrementDailyCount(user.id, user.organizationId, params.channel),
@@ -150,9 +151,7 @@ export async function logTouchOutcome(params: {
       after: {
         channel: params.channel,
         outcome: params.outcome,
-        ...(params.channel === "call" && params.scriptUsed
-          ? { scriptUsed: params.scriptUsed, scriptRating: params.scriptRating ?? null }
-          : {}),
+        ...(scriptUsed ? { scriptUsed, scriptId, scriptRating: params.scriptRating ?? null } : {}),
       },
     }),
   ]);
@@ -178,5 +177,14 @@ export async function logTouchOutcome(params: {
   revalidatePath("/deals");
   revalidatePath("/whats-working");
 
-  return { dealId };
+  return { dealId, touchId: touch.id };
+}
+
+export async function rateTouchScript(touchId: string, rating: "helpful" | "meh" | "bad") {
+  const user = await requireUser();
+  await prisma.touch.updateMany({
+    where: { id: touchId, userId: user.id, organizationId: user.organizationId },
+    data: { scriptRating: rating },
+  });
+  revalidatePath("/whats-working");
 }

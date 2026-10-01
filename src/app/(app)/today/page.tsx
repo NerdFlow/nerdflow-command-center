@@ -6,6 +6,7 @@ import { getQueueForUser } from "@/server/queue";
 import { computeFlags, STAGE_LABEL } from "@/server/deals";
 import { getOrgSettings } from "@/server/settings";
 import { zonedParts } from "@/server/cadence";
+import { tallyFocusChannels } from "@/lib/focusQueue";
 import { Chip, Ring, SectionLabel } from "@/components/ui";
 import { BriefVoiceLine } from "@/components/BriefVoiceLine";
 import { EndOfDayCard } from "@/components/EndOfDayCard";
@@ -88,11 +89,9 @@ export default async function TodayPage() {
     .filter((d) => d.flags.length > 0)
     .slice(0, 3);
 
-  const countByChannel: Partial<Record<Channel, number>> = {};
-  for (const item of queue) {
-    const ch: Channel = item.channel ?? "email";
-    countByChannel[ch] = (countByChannel[ch] ?? 0) + 1;
-  }
+  const countByChannel = tallyFocusChannels(
+    queue.map((item) => ({ phone: item.lead.phone, cadence: item.channel ?? "email" })),
+  );
 
   const readyChannels = (["call", "email", "instagram", "linkedin"] as Channel[])
     .map((ch) => ({ ch, count: countByChannel[ch] ?? 0 }))
