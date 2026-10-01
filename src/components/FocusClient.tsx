@@ -1,11 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
 import { splitEmailDraft } from "@/server/cadence";
+import {
+  dropCard,
+  finishPending,
+  focusSessionStacks,
+  normalizeCallerNote,
+  recordPending,
+  restoreCard,
+  startOptimisticOutcome,
+  whoLine,
+  whyThisLead,
+  websiteHref,
+  websiteLabel,
+  type PendingOutcome,
+} from "@/lib/focusCallCard";
 import { cadenceChannel, cardInRepQueue, focusWorkingChannel, matchesFocusFilter } from "@/lib/focusQueue";
-import { focusObjections, resolveFocusOpener, type ScriptRating } from "@/lib/focusScripts";
+import { callPlaceholderName, resolveFocusObjections, resolveFocusOpener, type ScriptRating } from "@/lib/focusScripts";
 import { linkedinOpenUrl, mailtoUrl } from "@/lib/outreachLinks";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
 import type { CampaignStrategy } from "@/server/strategy";
@@ -33,6 +47,7 @@ type Card = {
     fitReasons: string[];
     fitFlags: string[];
     source: LeadSource;
+    lastTouchLabel: string | null;
   };
   campaign: { id: string; name: string; productName: string; strategy: CampaignStrategy };
   label: string;
@@ -79,9 +94,10 @@ function outcomesFor(channel: Channel): OutcomeDef[] {
   return channel === "call" ? CALL_OUTCOMES : MESSAGE_OUTCOMES;
 }
 
-function firstNameOf(contactName: string | null): string {
-  if (!contactName) return "there";
-  return contactName.trim().split(/\s+/)[0] ?? "there";
+function greetingName(channel: Channel, contactName: string | null, role: string | null): string {
+  if (channel === "call") return contactName?.trim() ? callPlaceholderName(contactName) : "";
+  const first = contactName?.trim().split(/\s+/)[0];
+  return first || "there";
 }
 
 const SESSION_LENGTHS: { label: string; seconds: number | null }[] = [
@@ -135,9 +151,11 @@ export function FocusClient({
     return "all";
   });
   const [sourceFilter, setSourceFilter] = useState<LeadSource | "all">("all");
-  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [callNote, setCallNote] = useState("");
+  const inFlight = useRef(new Set<string>());
+  const pendingSaves = useRef<PendingOutcome[]>([]);
   const [pendingRating, setPendingRating] = useState<{ touchId: string; businessName: string } | null>(null);
 
   const [started, setStarted] = useState(false);
@@ -182,11 +200,12 @@ export function FocusClient({
       productName: current.campaign.productName,
       strategy: current.campaign.strategy,
       values: {
-        name: firstNameOf(current.lead.contactName),
+        name: greetingName(channel, current.lead.contactName, current.lead.contactRole),
         biz: current.lead.businessName,
         city: current.lead.city || "",
         me,
         product: current.campaign.productName,
+        role: current.lead.contactRole ?? undefined,
       },
     });
   }, [current, channel, me]);
@@ -201,9 +220,16 @@ export function FocusClient({
   }, [current, channel, opener]);
 
   const objections = useMemo(() => {
-    if (!current) return [];
-    return focusObjections(current.campaign.strategy, current.campaign.productName);
-  }, [current]);
+    if (!current || !opener) return [];
+    return resolveFocusObjections(current.campaign.strategy, current.campaign.productName, {
+      name: greetingName(channel, current.lead.contactName, current.lead.contactRole),
+      biz: current.lead.businessName,
+      city: current.lead.city || "",
+      me,
+      product: current.campaign.productName,
+      role: current.lead.contactRole ?? undefined,
+    });
+  }, [current, opener, channel, me]);
 
   useEffect(() => {
     if (!started || sessionLengthSeconds === null) return;
@@ -226,14 +252,15 @@ export function FocusClient({
       if (!started || !current) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
       const match = outcomes.find((o) => o.key === e.key);
-      if (match) void handleOutcome(match.outcome);
+      if (match) handleOutcome(match.outcome);
       if (e.key.toLowerCase() === "s") skip();
       if (e.key.toLowerCase() === "c") copy();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // handleOutcome closes over the current card and the note; rebind when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, current, outcomes, draftText]);
+  }, [started, current, outcomes, draftText, callNote, opener, channel]);
 
   function startSession(ch: Channel | "all") {
     if (ch !== "all") setChannelFilter(ch);
@@ -256,34 +283,49 @@ export function FocusClient({
     });
   }
 
-  async function handleOutcome(outcome: TouchOutcome) {
+  function handleOutcome(outcome: TouchOutcome) {
     if (!current || !opener) return;
-    setBusy(true);
+    const card = current;
+    const leadId = card.lead.id;
+    if (!startOptimisticOutcome(inFlight.current, leadId)) return;
+
+    const note = channel === "call" ? normalizeCallerNote(callNote) : null;
+    const scriptUsed = opener.variant;
+    const scriptId = opener.scriptId;
+    const workingChannel = channel;
+    const countsAsConversation = outcome === "replied" || outcome === "interested" || outcome === "meeting_booked";
+
+    pendingSaves.current = recordPending(pendingSaves.current, { leadId, outcome, callerNote: note });
+    setCards((prev) => dropCard(prev, leadId));
+    setCallNote("");
     setError(null);
-    try {
-      const res = await logTouchOutcome({
-        leadId: current.lead.id,
-        channel,
-        outcome,
-        scriptUsed: opener.variant,
-        scriptId: opener.scriptId,
+    setTouchesLogged((n) => n + 1);
+    if (countsAsConversation) setConversations((n) => n + 1);
+
+    void logTouchOutcome({
+      leadId,
+      channel: workingChannel,
+      outcome,
+      scriptUsed,
+      scriptId,
+      callerNote: note ?? undefined,
+    })
+      .then((res) => {
+        pendingSaves.current = finishPending(pendingSaves.current, leadId);
+        if (res.touchId) setPendingRating({ touchId: res.touchId, businessName: card.lead.businessName });
+        if ((outcome === "interested" || outcome === "meeting_booked") && res.dealId) router.refresh();
+      })
+      .catch((e: unknown) => {
+        pendingSaves.current = finishPending(pendingSaves.current, leadId);
+        setCards((prev) => restoreCard(prev, card));
+        setTouchesLogged((n) => Math.max(0, n - 1));
+        if (countsAsConversation) setConversations((n) => Math.max(0, n - 1));
+        if (note) setCallNote(note);
+        setError(e instanceof Error ? e.message : "Couldn't log that outcome — it's back on this card.");
+      })
+      .finally(() => {
+        inFlight.current.delete(leadId);
       });
-      const doneLeadId = current.lead.id;
-      const businessName = current.lead.businessName;
-      setCards((prev) => prev.filter((c) => c.lead.id !== doneLeadId));
-      setTouchesLogged((n) => n + 1);
-      if (outcome === "replied" || outcome === "interested" || outcome === "meeting_booked") {
-        setConversations((n) => n + 1);
-      }
-      if (res.touchId) setPendingRating({ touchId: res.touchId, businessName });
-      if ((outcome === "interested" || outcome === "meeting_booked") && res.dealId) {
-        router.refresh();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't log that outcome — try again.");
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function rate(rating: ScriptRating) {
@@ -489,17 +531,27 @@ export function FocusClient({
     );
   }
 
-  const askFor = current.lead.contactName?.trim() || "the owner";
+  const askFor = current.lead.contactName?.trim() || current.lead.contactRole?.trim() || "the owner";
   const place = [current.lead.businessName, current.lead.city].filter(Boolean).join(" · ");
   const mailtoHref = current.lead.email && emailParts ? mailtoUrl(current.lead.email, emailParts.subject, emailParts.body) : null;
   const linkedinHref = channel === "linkedin" ? linkedinOpenUrl(current.lead) : null;
+  const stack = focusSessionStacks();
+  const callWhy =
+    channel === "call"
+      ? whyThisLead({
+          fitReasons: current.lead.fitReasons,
+          summary: current.campaign.strategy.summary,
+          icpBusiness: current.campaign.strategy.icp?.business,
+        })
+      : "";
+  const callSite = channel === "call" ? websiteHref(current.lead.website) : null;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {topBar}
       {ratingBar}
 
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-6 pb-28">
+      <div className={stack.card === "scroll" ? "flex-1 min-h-0 overflow-y-auto px-4 md:px-6 py-6" : "px-4 md:px-6 py-6"}>
         <div className="max-w-xl mx-auto space-y-5">
           <div>
             <p className="section-label mb-2">{channel === "call" ? "Calling" : channel === "email" ? "Emailing" : "Messaging"}</p>
@@ -507,6 +559,19 @@ export function FocusClient({
             <h2 className="text-2xl font-bold tracking-tight leading-tight m-0 mt-1">{place}</h2>
             {current.lead.contactRole && <p className="text-xs text-dim mt-1 mb-0">{current.lead.contactRole}</p>}
           </div>
+
+          {channel === "call" && (
+            <div className="bg-panel2 border border-rule rounded-xl px-4 py-3 space-y-1.5">
+              <p className="text-sm font-medium m-0">{whoLine(current.lead.contactName, current.lead.contactRole)}</p>
+              <p className="text-sm text-muted m-0 leading-relaxed">{callWhy}</p>
+              {callSite && (
+                <a href={callSite} target="_blank" rel="noreferrer" className="text-sm text-accent underline underline-offset-2">
+                  {websiteLabel(callSite)}
+                </a>
+              )}
+              {current.lead.lastTouchLabel && <p className="text-xs text-dim m-0">{current.lead.lastTouchLabel}</p>}
+            </div>
+          )}
 
           {localTime && (
             <p className={"text-xs font-medium m-0 " + (localTime.inBusinessHours ? "text-accent" : "text-warm")}>
@@ -584,7 +649,7 @@ export function FocusClient({
 
           <div className="bg-panel2 border border-accent/25 rounded-2xl px-5 py-4 space-y-2">
             <div className="flex justify-between items-center gap-2">
-              <p className="section-label mb-0 text-accent">Opener</p>
+              <p className="section-label mb-0 text-accent">{channel === "call" ? (opener.variant === "a" ? "Script A" : "Script B") : "Opener"}</p>
               <button type="button" onClick={copy} className="text-xs text-accent font-medium">
                 {copied ? "Copied" : "Copy · C"}
               </button>
@@ -609,15 +674,30 @@ export function FocusClient({
         </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 right-0 bg-panel/95 backdrop-blur-sm border-t border-rule px-4 md:px-6 py-3 z-20">
-        <div className="flex flex-wrap items-center gap-2 max-w-xl mx-auto">
+      <div
+        className={
+          stack.outcomes === "footer"
+            ? "shrink-0 max-h-[40vh] overflow-y-auto bg-panel/95 backdrop-blur-sm border-t border-rule px-4 md:px-6 py-3"
+            : "absolute bottom-0 left-0 right-0 bg-panel/95 backdrop-blur-sm border-t border-rule px-4 md:px-6 py-3 z-20"
+        }
+      >
+        <div className="max-w-xl mx-auto space-y-2">
+          {channel === "call" && (
+            <input
+              value={callNote}
+              onChange={(e) => setCallNote(e.target.value)}
+              placeholder="What they said (optional)"
+              maxLength={500}
+              className="w-full border border-rule rounded-xl px-3 py-2 bg-bg text-sm"
+            />
+          )}
+          <div className="flex flex-wrap items-center gap-2">
           <span className="section-label mr-1 mb-0 hidden sm:inline">How did it go?</span>
           {outcomes.map((o) => (
             <button
               type="button"
               key={o.outcome}
-              disabled={busy}
-              onClick={() => void handleOutcome(o.outcome)}
+              onClick={() => handleOutcome(o.outcome)}
               className={
                 "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-all duration-150 active:scale-[0.97] disabled:opacity-40 " +
                 (o.variant === "go"
@@ -631,9 +711,10 @@ export function FocusClient({
               <span className="font-mono text-[10px] opacity-40">{o.key}</span>
             </button>
           ))}
-          <button type="button" onClick={skip} disabled={busy} className="text-xs text-dim hover:text-ink px-3 py-2">
+          <button type="button" onClick={skip} className="text-xs text-dim hover:text-ink px-3 py-2">
             Skip · S
           </button>
+          </div>
         </div>
       </div>
     </div>

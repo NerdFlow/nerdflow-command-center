@@ -104,7 +104,7 @@ export function AppShell({
     return (
       <ShellExtrasContext.Provider value={reportExtras}>
         {extras}
-        <div className="min-h-screen app-atmosphere flex flex-col">
+        <div className="h-dvh overflow-hidden app-atmosphere flex flex-col">
         {impersonating && <ImpersonationBanner name={user.fullName} />}
         <div className="flex items-center justify-between px-4 md:px-8 py-3 border-b border-rule bg-panel/80 backdrop-blur-sm">
           <div className="flex items-center gap-2.5 min-w-0">

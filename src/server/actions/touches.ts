@@ -7,6 +7,7 @@ import { planNextCadenceStep, scheduleNextTouch, type WorkingHours } from "@/ser
 import { incrementDailyCount } from "@/server/targets";
 import { writeAuditLog } from "@/server/audit";
 import type { CampaignStrategy } from "@/server/strategy";
+import { normalizeCallerNote } from "@/lib/focusCallCard";
 import type { Channel, TouchOutcome } from "@prisma/client";
 
 const CONVERSATION_KIND_BY_CHANNEL: Record<Channel, "call" | "email_in" | "dm_in"> = {
@@ -137,7 +138,7 @@ export async function logTouchOutcome(params: {
         scriptUsed,
         scriptId,
         scriptRating: params.scriptRating ?? null,
-        callerNote: params.callerNote?.trim() || null,
+        callerNote: normalizeCallerNote(params.callerNote),
       },
     }),
     incrementDailyCount(user.id, user.organizationId, params.channel),

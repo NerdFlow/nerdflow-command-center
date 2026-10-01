@@ -49,8 +49,60 @@ export function variantFromTouch(scriptUsed: string | null | undefined, scriptId
   return null;
 }
 
-function fillPlaceholders(template: string, values: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? `{${key}}`);
+export type FocusTemplateValues = {
+  name: string;
+  biz: string;
+  city: string;
+  me: string;
+  product: string;
+  role?: string;
+};
+
+/** First name when we have one. A blank call name becomes the role, or "the owner". */
+export function callPlaceholderName(contactName: string | null | undefined, role?: string | null): string {
+  const first = contactName?.trim().split(/\s+/)[0];
+  if (first) return first;
+  const roleText = role?.trim();
+  if (!roleText) return "the owner";
+  return /^the\s+/i.test(roleText) ? roleText : `the ${roleText.toLowerCase()}`;
+}
+
+/**
+ * Replace every {token}. Known aliases map to stored fields.
+ * A blank city drops "in {city}" instead of leaving a hole. Unknown tokens are removed.
+ */
+export function fillFocusTemplate(template: string, values: FocusTemplateValues): string {
+  const name = values.name.trim() ? callPlaceholderName(values.name) : callPlaceholderName("", values.role);
+  const biz = values.biz.trim();
+  const city = values.city.trim();
+  const me = values.me.trim();
+  const product = values.product.trim();
+  let text = template;
+  if (!city) text = text.replace(/\s+in\s+\{city\}/gi, "");
+  const map: Record<string, string> = {
+    name,
+    firstname: name,
+    first_name: name,
+    contact: name,
+    contact_name: name,
+    biz,
+    business: biz,
+    company: biz,
+    business_name: biz,
+    city,
+    me,
+    myname: me,
+    product,
+    productname: product,
+    product_name: product,
+    role: values.role?.trim() || "",
+  };
+  text = text.replace(/\{(\w+)\}/g, (_, key: string) => map[key.toLowerCase()] ?? "");
+  return text.replace(/[ \t]{2,}/g, " ").replace(/\s+([?.!,])/g, "$1").trim();
+}
+
+export function hasTemplateHole(text: string): boolean {
+  return /\{[a-z0-9_]+\}/i.test(text);
 }
 
 function pair(scripts: [string, string] | string[] | null | undefined): [string, string] {
@@ -103,7 +155,7 @@ export function resolveFocusOpener(input: {
   leadId: string;
   productName: string;
   strategy: ScriptStrategy;
-  values: { name: string; biz: string; city: string; me: string; product: string };
+  values: FocusTemplateValues;
 }): { text: string; variant: ScriptVariant; scriptId: string } {
   const variant = assignScriptVariant(input.leadId);
   const scriptId = scriptIdFor(input.channel, variant);
@@ -131,8 +183,19 @@ export function resolveFocusOpener(input: {
     raw = safeTemplate(input.channel === "email" ? "email" : "call", input.productName, input.strategy, variant) || NEUTRAL_CALL;
   }
 
-  const filled = fillPlaceholders(presentOpener(raw), input.values);
+  const filled = fillFocusTemplate(presentOpener(raw), input.values);
   return { text: filled, variant, scriptId };
+}
+
+export function resolveFocusObjections(
+  strategy: ScriptStrategy,
+  productName: string,
+  values: FocusTemplateValues,
+): { question: string; answer: string }[] {
+  return focusObjections(strategy, productName).map((item) => ({
+    question: fillFocusTemplate(item.question, values),
+    answer: fillFocusTemplate(item.answer, values),
+  }));
 }
 
 export function focusObjections(
