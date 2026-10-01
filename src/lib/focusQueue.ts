@@ -27,8 +27,9 @@ export function cadenceChannel(card: FocusQueueCard): Channel {
 }
 
 /**
- * Call mode is phone-first: every lead with a phone, whatever the cadence
- * step says. Email and LinkedIn stay on the cadence-resolved channel.
+ * Call mode is phone-first: every lead with a phone, whatever the cadence step says.
+ * LinkedIn mode is the whole Focus queue (profile or people search), not the cadence step.
+ * Email stays on the cadence-resolved channel.
  */
 export function matchesFocusFilter(
   card: FocusQueueCard,
@@ -40,6 +41,7 @@ export function matchesFocusFilter(
     if (options?.inBusinessHours === false) return false;
     return true;
   }
+  if (filter === "linkedin") return true;
   if (filter === "all") {
     if (options?.inBusinessHours === false && cadenceChannel(card) === "call") return false;
     return true;
@@ -54,21 +56,27 @@ export function focusWorkingChannel(card: FocusQueueCard, filter: Channel | "all
 }
 
 /**
- * A rep's queue includes cadence cards they work, plus every phone lead when
- * they work calls — Day-0 email cadence must not hide those leads.
+ * Call counts phones. Email and Instagram stay on the cadence step.
+ * LinkedIn counts every lead in the queue, even when the cadence step is email.
  */
-/** Call counts phones. Other channels stay on the cadence step, so a phone lead is not counted twice as a call. */
 export function tallyFocusChannels(
   items: Array<{ phone: string | null; cadence: Channel }>,
 ): Partial<Record<Channel, number>> {
   const counts: Partial<Record<Channel, number>> = {};
   for (const item of items) {
     if (leadHasPhone(item.phone)) counts.call = (counts.call ?? 0) + 1;
-    if (item.cadence !== "call") counts[item.cadence] = (counts[item.cadence] ?? 0) + 1;
+    if (item.cadence === "email" || item.cadence === "instagram") {
+      counts[item.cadence] = (counts[item.cadence] ?? 0) + 1;
+    }
+    counts.linkedin = (counts.linkedin ?? 0) + 1;
   }
   return counts;
 }
 
+/**
+ * A rep's queue includes cadence cards they work, plus every phone lead when
+ * they work calls — Day-0 email cadence must not hide those leads.
+ */
 export function cardInRepQueue(card: FocusQueueCard, allowedChannels: Channel[]): boolean {
   if (allowedChannels.includes("call") && leadHasPhone(card.lead.phone)) return true;
   return allowedChannels.includes(cadenceChannel(card));

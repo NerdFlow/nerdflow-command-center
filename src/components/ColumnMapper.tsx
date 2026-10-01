@@ -34,6 +34,21 @@ export function ColumnMapper({
         </label>
       ))}
       <label className="text-sm">
+        If phone is blank, use
+        <select
+          className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg mt-1"
+          value={mapping.phone_fallback ?? ""}
+          onChange={(e) => onChange({ ...mapping, phone_fallback: e.target.value || undefined })}
+        >
+          <option value="">— none —</option>
+          {headers.map((h) => (
+            <option key={h} value={h}>
+              {h}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="text-sm">
         If email is blank, use
         <select
           className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg mt-1"

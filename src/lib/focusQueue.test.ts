@@ -50,16 +50,20 @@ describe("phone-first Call queue", () => {
     expect(matchesFocusFilter(card({ phone: "   " }), "call")).toBe(false);
     expect(matchesFocusFilter(card({ phone: "n/a" }), "call")).toBe(false);
     expect(leadHasPhone("555-0100")).toBe(true);
+    expect(leadHasPhone("(203) 668-8164")).toBe(true);
   });
 
-  it("keeps Email and LinkedIn on the cadence step", () => {
+  it("keeps Email on the cadence step and shows LinkedIn for the whole queue", () => {
     const lead = card();
     expect(matchesFocusFilter(lead, "email")).toBe(true);
-    expect(matchesFocusFilter(lead, "linkedin")).toBe(false);
+    expect(matchesFocusFilter(lead, "linkedin")).toBe(true);
+    expect(matchesFocusFilter(card({ phone: null }), "linkedin")).toBe(true);
     expect(focusWorkingChannel(lead, "email")).toBe("email");
+    expect(focusWorkingChannel(lead, "linkedin")).toBe("linkedin");
     const onCallStep = card({ step: 1 });
     expect(cadenceChannel(onCallStep)).toBe("call");
     expect(matchesFocusFilter(onCallStep, "email")).toBe(false);
+    expect(matchesFocusFilter(onCallStep, "linkedin")).toBe(true);
     expect(matchesFocusFilter(onCallStep, "call")).toBe(true);
   });
 
@@ -71,10 +75,11 @@ describe("phone-first Call queue", () => {
     expect(cardInRepQueue(card({ phone: null }), ["email"])).toBe(true);
   });
 
-  it("counts a Day-0 email lead with a phone under Call and Email", () => {
-    expect(tallyFocusChannels([{ phone: "512-555-0199", cadence: "email" }])).toEqual({ call: 1, email: 1 });
-    expect(tallyFocusChannels([{ phone: null, cadence: "email" }])).toEqual({ email: 1 });
-    expect(tallyFocusChannels([{ phone: "512-555-0199", cadence: "call" }])).toEqual({ call: 1 });
+  it("counts phones under Call, cadence under Email, and every lead under LinkedIn", () => {
+    expect(tallyFocusChannels([{ phone: "512-555-0199", cadence: "email" }])).toEqual({ call: 1, email: 1, linkedin: 1 });
+    expect(tallyFocusChannels([{ phone: null, cadence: "email" }])).toEqual({ email: 1, linkedin: 1 });
+    expect(tallyFocusChannels([{ phone: "(203) 668-8164", cadence: "call" }])).toEqual({ call: 1, linkedin: 1 });
+    expect(tallyFocusChannels([{ phone: null, cadence: "email" }, { phone: null, cadence: "email" }]).linkedin).toBe(2);
   });
 
   it("hides out-of-hours calls only when that filter is on", () => {
