@@ -1,7 +1,7 @@
 /** Opens the OS mail handler (Titan, when that is the default on this Mac). The app never sends. */
-export function mailtoUrl(to: string, subject: string, body: string): string {
+export function mailtoUrl(to: string, subject: string, body: string, max = 700): string {
   const address = to.trim();
-  const shortBody = shortenMailBody(body);
+  const shortBody = shortenMailBody(body, max);
   return `mailto:${address}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(shortBody)}`;
 }
 

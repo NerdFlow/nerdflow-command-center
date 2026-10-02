@@ -5,6 +5,7 @@ import { splitEmailDraft } from "@/server/cadence";
 import { buildCallCard, focusSessionStacks, normalizeCallerNote, websiteLabel, whoLine, whyThisLead } from "@/lib/focusCallCard";
 import { resolveFocusOpener } from "@/lib/focusScripts";
 import { linkedinOpenUrl, mailtoUrl } from "@/lib/outreachLinks";
+import { OUTCOME_FOLLOW_UP, outcomeLabels, pipelineMailtoHref, pipelineTimeChip, TITAN_FROM } from "@/lib/pipelineToday";
 import { leadLocalTimeStatus } from "@/server/leadTimezone";
 import {
   actionHeader,
@@ -59,6 +60,7 @@ export function ShapeASession({
   onOpenCoach,
   onDone,
   onSkip,
+  onFollowUp,
   onCallOutcome,
 }: {
   rows: Row[];
@@ -81,6 +83,7 @@ export function ShapeASession({
   onOpenCoach: () => void;
   onDone: (row: Row, script?: { variant: "a" | "b"; scriptId: string }) => void;
   onSkip: (row: Row) => void;
+  onFollowUp: (row: Row) => void;
   onCallOutcome: (row: Row, outcome: TouchOutcome, note: string | null, script: { variant: "a" | "b"; scriptId: string }) => void;
 }) {
   const current = rows[0];
@@ -94,7 +97,7 @@ export function ShapeASession({
   }, [current?.action.key]);
 
   const emailParts = useMemo(() => {
-    if (!current || current.action.kind !== "send_email") return null;
+    if (!current || current.card.pipeline || current.action.kind !== "send_email") return null;
     const opener = resolveFocusOpener({
       channel: "email",
       leadId: current.card.lead.id,
@@ -118,20 +121,30 @@ export function ShapeASession({
     };
   }, [current, me]);
 
+  const pipeline = current?.card.pipeline ?? null;
   const reply = current?.action.replyId
     ? current.card.openReplies.find((item) => item.id === current.action.replyId) ?? null
     : null;
-  const draftText =
-    current?.action.kind === "reply"
+  const draftText = pipeline
+    ? pipeline.blankMessage
+      ? ""
+      : pipeline.message.trim()
+    : current?.action.kind === "reply"
       ? reply?.responseDraft?.trim() || ""
       : current?.action.kind === "send_email"
         ? emailParts?.body || ""
         : current?.action.kind === "instagram" || current?.action.kind === "contact_form"
           ? emailParts?.body || ""
           : "";
+  const outcomeMode = current
+    ? pipeline?.outcomeMode ?? (actionOutcomeMode(current.action.kind) === "call" ? "call" : actionOutcomeMode(current.action.kind))
+    : "done_skip";
+  const warmLabels = outcomeMode === "call" ? [] : outcomeLabels(outcomeMode);
+  const showFollowUp = warmLabels.includes(OUTCOME_FOLLOW_UP);
+  const showSkip = outcomeMode === "call" || warmLabels.includes("Skip");
 
   function copy() {
-    const text = current?.action.kind === "reply" ? reply?.responseDraft?.trim() || "" : draftText;
+    const text = draftText;
     if (!text || (current && actionShowsBlankMessage(current.action.kind))) return;
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -143,8 +156,9 @@ export function ShapeASession({
     function onKey(e: KeyboardEvent) {
       if (!current) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
-      if (e.key.toLowerCase() === "s") onSkip(current);
+      if (showSkip && e.key.toLowerCase() === "s") onSkip(current);
       if (e.key.toLowerCase() === "c") copy();
+      if (showFollowUp && e.key === "2") onFollowUp(current);
       if (actionOutcomeMode(current.action.kind) === "call") {
         const match = CALL_OUTCOMES.find((item) => item.key === e.key);
         if (match) {
@@ -170,11 +184,15 @@ export function ShapeASession({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, callNote, emailParts, me]);
+  }, [current, callNote, emailParts, me, showFollowUp, showSkip, onFollowUp]);
 
   const mins = sessionLengthSeconds === null ? null : Math.floor(secondsLeft / 60);
   const secs = sessionLengthSeconds === null ? null : String(secondsLeft % 60).padStart(2, "0");
-  const header = current ? actionHeader(current.action.kind, current.card.lead.businessName, clock) : "Today";
+  const header = current
+    ? current.card.pipeline
+      ? pipelineTimeChip(current.card.pipeline.kind, current.card.pipeline.timeLabel, current.card.pipeline.actionLabel)
+      : actionHeader(current.action.kind, current.card.lead.businessName, clock)
+    : "Today";
 
   const topBar = (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0">
@@ -232,23 +250,34 @@ export function ShapeASession({
   const kind = current.action.kind;
   const askFor = lead.contactName?.trim().split(/\s+/)[0] || lead.contactRole?.trim() || "the owner";
   const cadencePurpose = current.card.campaign.strategy.cadence?.[lead.cadenceStep]?.purpose ?? null;
-  const intel = shapeIntel({
-    contactRole: lead.contactRole,
-    city: lead.city,
-    region: lead.region,
-    fitReasons: lead.fitReasons,
-    summary: current.card.campaign.strategy.summary,
-    icpBusiness: current.card.campaign.strategy.icp?.business,
-    cadencePurpose,
-  });
-  const formUrl = contactFormUrl(lead.signals);
-  const mailtoHref =
-    kind === "send_email" && lead.email && emailParts
+  const intel = pipeline
+    ? pipeline.intel
+    : shapeIntel({
+        contactRole: lead.contactRole,
+        city: lead.city,
+        region: lead.region,
+        fitReasons: lead.fitReasons,
+        summary: current.card.campaign.strategy.summary,
+        icpBusiness: current.card.campaign.strategy.icp?.business,
+        cadencePurpose,
+      });
+  const formUrl = pipeline
+    ? pipeline.linkKind === "contact_form"
+      ? pipeline.linkUrl
+      : null
+    : contactFormUrl(lead.signals);
+  const mailtoHref = pipeline
+    ? pipelineMailtoHref(pipeline)
+    : kind === "send_email" && lead.email && emailParts
       ? mailtoUrl(lead.email, emailParts.subject, emailParts.body)
       : kind === "reply" && current.action.channel === "email" && lead.email && reply?.responseDraft
         ? mailtoUrl(lead.email, `Re: ${lead.businessName}`, reply.responseDraft)
         : null;
-  const linkedinHref = kind === "linkedin_request" || (kind === "reply" && current.action.channel === "linkedin") ? linkedinOpenUrl(lead) : null;
+  const wantsLinkedIn =
+    kind === "linkedin_request" ||
+    (kind === "follow_up" && pipeline?.linkKind === "linkedin_profile") ||
+    (kind === "reply" && (pipeline ? pipeline.linkKind === "linkedin_profile" : current.action.channel === "linkedin"));
+  const linkedinHref = wantsLinkedIn ? pipeline?.linkUrl || linkedinOpenUrl(lead) : null;
   const callModel =
     kind === "call"
       ? buildCallCard({
@@ -275,7 +304,7 @@ export function ShapeASession({
       <div className={stack.card === "scroll" ? "flex-1 min-h-0 overflow-y-auto px-4 md:px-6 py-6" : "px-4 md:px-6 py-6"}>
         <div className="max-w-xl mx-auto space-y-5">
           <div>
-            <p className="section-label mb-2">{actionKicker(kind)}</p>
+            <p className="section-label mb-2">{actionKicker(kind, pipeline?.actionLabel)}</p>
             <p className="text-sm text-muted m-0">Ask for {askFor}</p>
             <h2 className="text-2xl font-bold tracking-tight leading-tight m-0 mt-1">{shapeHeadline(lead.contactName, lead.businessName)}</h2>
           </div>
@@ -327,9 +356,11 @@ export function ShapeASession({
 
           {kind !== "call" && kind !== "linkedin_request" && (
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={copy} className="inline-flex items-center justify-center border border-rule bg-panel font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40">
-                {copied ? "Copied" : "Copy draft"}
-              </button>
+              {draftText && (
+                <button type="button" onClick={copy} className="inline-flex items-center justify-center border border-rule bg-panel font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40">
+                  {copied ? "Copied" : pipeline ? "Copy" : "Copy draft"}
+                </button>
+              )}
               {mailtoHref && (
                 <a href={mailtoHref} className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover">
                   Open in Titan
@@ -340,7 +371,7 @@ export function ShapeASession({
                   Open LinkedIn
                 </a>
               )}
-              {kind === "contact_form" && formUrl && (
+              {(kind === "contact_form" || pipeline?.linkKind === "contact_form") && formUrl && (
                 <a href={formUrl} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover">
                   Open form
                 </a>
@@ -359,8 +390,12 @@ export function ShapeASession({
             </a>
           )}
 
-          {kind === "send_email" && <p className="text-xs text-dim m-0">You send it yourself. Nothing goes out from here.</p>}
-          {kind === "contact_form" && <p className="text-xs text-dim m-0">You send it yourself. Nothing goes out from here.</p>}
+          {(kind === "send_email" || kind === "contact_form" || (pipeline && pipeline.linkKind === "mailto")) && (
+            <p className="text-xs text-dim m-0">
+              {pipeline ? `From Titan · ${TITAN_FROM}. ` : ""}
+              You send it yourself. Nothing goes out from here.
+            </p>
+          )}
 
           {kind === "linkedin_request" && (
             <div className="bg-panel2 border border-rule rounded-2xl px-5 py-4">
@@ -369,7 +404,15 @@ export function ShapeASession({
             </div>
           )}
 
-          {kind === "send_email" && emailParts && (
+          {pipeline && kind !== "linkedin_request" && (
+            <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
+              <p className="section-label mb-0 text-accent">Message</p>
+              {pipeline.mailtoSubject && <p className="text-sm font-semibold m-0">{pipeline.mailtoSubject}</p>}
+              <p className="text-base leading-relaxed m-0 whitespace-pre-wrap">{pipeline.message.trim() || "No message on this row."}</p>
+            </div>
+          )}
+
+          {!pipeline && kind === "send_email" && emailParts && (
             <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
               <p className="section-label mb-0 text-accent">Opener</p>
               {emailParts.subject && <p className="text-sm font-semibold m-0">{emailParts.subject.replace(/^Subject:\s*/i, "")}</p>}
@@ -377,7 +420,7 @@ export function ShapeASession({
             </div>
           )}
 
-          {kind === "reply" && (
+          {!pipeline && kind === "reply" && (
             <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
               <p className="section-label mb-0 text-accent">Message</p>
               <p className="text-base leading-relaxed m-0 whitespace-pre-wrap">{reply?.responseDraft?.trim() || "No draft stored. Paste your own in LinkedIn. Nothing is sent from here."}</p>
@@ -422,37 +465,44 @@ export function ShapeASession({
           )}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted mr-1">How did it go?</span>
-            {kind === "call" && callModel
-              ? CALL_OUTCOMES.map((item) => (
-                  <button
-                    type="button"
-                    key={item.outcome}
-                    onClick={() => onCallOutcome(current, item.outcome, normalizeCallerNote(callNote), { variant: callModel.variant, scriptId: callModel.scriptId })}
-                    className={
-                      "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium " +
-                      (item.variant === "go"
-                        ? "bg-accent-soft border-accent/40 text-accent"
-                        : item.variant === "stop"
-                          ? "bg-stop-soft border-stop/30 text-stop"
-                          : "bg-panel2 border-rule text-muted hover:text-ink")
-                    }
-                  >
-                    <span>{item.label}</span>
-                    <span className="font-mono text-[10px] opacity-40">{item.key}</span>
-                  </button>
-                ))
-              : (
+            {kind === "call" && callModel ? (
+              CALL_OUTCOMES.map((item) => (
                 <button
                   type="button"
-                  onClick={() => onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined)}
-                  className="bg-accent text-on-accent font-semibold px-4 py-2 rounded-xl text-sm"
+                  key={item.outcome}
+                  onClick={() => onCallOutcome(current, item.outcome, normalizeCallerNote(callNote), { variant: callModel.variant, scriptId: callModel.scriptId })}
+                  className={
+                    "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium " +
+                    (item.variant === "go"
+                      ? "bg-accent-soft border-accent/40 text-accent"
+                      : item.variant === "stop"
+                        ? "bg-stop-soft border-stop/30 text-stop"
+                        : "bg-panel2 border-rule text-muted hover:text-ink")
+                  }
                 >
-                  Done
+                  <span>{item.label}</span>
+                  <span className="font-mono text-[10px] opacity-40">{item.key}</span>
                 </button>
-              )}
-            <button type="button" onClick={() => onSkip(current)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
-              Skip
-            </button>
+              ))
+            ) : (
+              <button
+                type="button"
+                onClick={() => onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined)}
+                className="bg-accent text-on-accent font-semibold px-4 py-2 rounded-xl text-sm"
+              >
+                Done
+              </button>
+            )}
+            {showFollowUp && kind !== "call" && (
+              <button type="button" onClick={() => onFollowUp(current)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
+                Needs follow-up
+              </button>
+            )}
+            {showSkip && (
+              <button type="button" onClick={() => onSkip(current)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
+                Skip
+              </button>
+            )}
           </div>
         </div>
       </div>

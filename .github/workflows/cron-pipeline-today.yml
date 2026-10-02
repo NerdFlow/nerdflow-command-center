@@ -1,0 +1,26 @@
+name: Cron - Pipeline Today sync
+
+# 15:31 Asia/Karachi (UTC+5, no DST) on weekdays, five minutes after the
+# Sales Pipeline Today tab rebuilds at 15:26 PKT. Skips cleanly when
+# Google Sheets credentials are not configured.
+on:
+  schedule:
+    - cron: "31 10 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/pipeline-today
+        run: |
+          set -eu
+          HTTP_CODE=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+            "${{ secrets.APP_URL }}/api/cron/pipeline-today" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/resp.json
+          if [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Cron call failed"
+            exit 1
+          fi

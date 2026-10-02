@@ -61,6 +61,9 @@ To wipe the demo dataset later without touching real accounts: `npm run seed:cle
 | `AI_PROVIDER` | AI features | `gemini` or `anthropic`. Gemini is used when `GEMINI_API_KEY` is set |
 | `GEMINI_API_KEY` | Gemini | From [Google AI Studio](https://aistudio.google.com/apikey). Without a key, AI features use rule-based fallbacks |
 | `ANTHROPIC_API_KEY` | Claude | Optional. Used when `AI_PROVIDER=anthropic` |
+| `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` | Today sync | Optional. Reads the Sales Pipeline Today tab. Without it, paste the tab on Focus. [`docs/PIPELINE_TODAY_SYNC.md`](docs/PIPELINE_TODAY_SYNC.md) |
+| `FOCUS_TODAY_OWNER_EMAIL` | Today sync | Optional. Defaults to Muqeet (`muqeet@nerdflow.tech`) |
+| `CRON_SECRET` | Cron | Bearer token for `/api/cron/lead-gen` and `/api/cron/pipeline-today` |
 
 Phase 1 enforces roles in server actions. Prisma connects as the database user, so Supabase row-level security does not apply to these queries.
 

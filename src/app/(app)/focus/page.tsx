@@ -17,6 +17,7 @@ export default async function FocusPage({ searchParams }: { searchParams: { chan
 
   return (
     <FocusClient
+      key={board.sync?.lastSyncAt ?? "focus"}
       initialCards={board.cards}
       coachLeads={board.coachLeads}
       assistantName={assistantName}
@@ -24,6 +25,8 @@ export default async function FocusPage({ searchParams }: { searchParams: { chan
       repTimezone={user.timezone}
       allowedChannels={allowedChannels}
       initialChannel={initialChannel}
+      suppressCall={board.suppressCall}
+      sync={board.sync}
     />
   );
 }
