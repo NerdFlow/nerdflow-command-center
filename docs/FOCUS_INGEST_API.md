@@ -60,6 +60,7 @@ Response:
 Rules:
 
 - Replaces that day's **open** cards for Muqeet only. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears the open cards. A payload where every card is rejected does not change the queue.
+- The whole day is one database transaction. Send the full list (a 15-card day, or 30+) in one request. Do not split it into batches under 10 cards.
 - Cards already **done**, **skipped**, or **needs follow-up** on that day are left in place. Pass `"force": true` or `?force=true` to drop them and to let a `done: false` card reopen.
 - `action` of Call or Phone is rejected (`call_not_allowed`) and is not stored. A payload whose every card is rejected returns **422** and does not change the queue.
 - `rules.autoSend: true` is rejected. The app never sends email, LinkedIn, or a form.
@@ -105,7 +106,8 @@ Unknown card is **404**. The same outcome again returns **200** with `"idempoten
 | 404 | Muqeet's user is missing, or the card id is unknown |
 | 409 | Card id already used on another day, or the outcome conflicts |
 | 422 | Body does not match the schema, or no card was accepted |
-| 500 | Save failed |
+| 500 | Save failed. Body is `{ "error": "Couldn't save the Today queue", "code": "save_failed" }` (complete uses its own `error` text). Retry the same body once. The VPS log `[focus-ingest] rebuild failed` includes the Prisma code and message. |
+| 503 | Database or transaction was busy. Body includes `"code": "db_busy"`. Wait a few seconds and send the same body again. Safe to retry; a failed rebuild does not leave a half-applied open queue. |
 | 501 | `FOCUS_INGEST_SECRET` is not set |
 
 ## OpenAPI
@@ -148,6 +150,8 @@ paths:
         "403": { description: Wrong owner }
         "409": { description: Stale card id }
         "422": { description: Validation failed }
+        "500": { description: "Save failed. code save_failed. Retry the same body." }
+        "503": { description: "Database busy. code db_busy. Retry the same body after a short wait." }
         "501": { description: Secret not configured }
     post:
       operationId: rebuildFocusDayPost
