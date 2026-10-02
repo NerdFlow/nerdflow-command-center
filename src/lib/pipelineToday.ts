@@ -102,6 +102,21 @@ export function pipelineExternalKey(queueDate: string, sheetRow: number): string
   return `${PIPELINE_SPREADSHEET_ID}:${PIPELINE_TODAY_SHEET_ID}:${queueDate}:${sheetRow}`;
 }
 
+/** Sheet-synced rows use this prefix. API card ids do not, so a sheet sync can leave them alone. */
+export function isSheetExternalKey(externalKey: string): boolean {
+  return externalKey.startsWith(`${PIPELINE_SPREADSHEET_ID}:${PIPELINE_TODAY_SHEET_ID}:`);
+}
+
+export function dateStampFromDb(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+/** Column G writeback only for a real Today-tab row. API cards store a display order, not a sheet row. */
+export function sheetRowForWriteback(externalKey: string, sheetRow: number): number | null {
+  if (!isSheetExternalKey(externalKey) || sheetRow <= 0) return null;
+  return sheetRow;
+}
+
 export function focusTodayOwnerCandidates(domain: string | null | undefined, envEmail: string | null | undefined): string[] {
   const emails = [envEmail, domain ? `muqeet@${domain.trim().toLowerCase()}` : null, "muqeet@nerdflow.tech"];
   const unique = new Set<string>();

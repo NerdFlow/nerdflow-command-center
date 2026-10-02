@@ -4,12 +4,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { writeAuditLog } from "@/server/audit";
-import { incrementDailyCount } from "@/server/targets";
 import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
 import { applyPipelineTodaySync } from "@/server/pipelineTodaySync";
 import { readPipelineTodayGrid } from "@/server/googleSheets";
-import { trySheetDualWrite } from "@/server/sheetDualWrite";
+import { commitPipelineTodayOutcome } from "@/server/pipelineTodayOutcome";
 import { parseTable } from "@/lib/pipelineToday";
 
 const syncSchema = z.object({
@@ -106,99 +104,12 @@ export async function recordPipelineOutcome(raw: z.input<typeof outcomeSchema>) 
   if (!row) throw new Error("That Today card is gone. Sync again.");
   if (row.ownerId !== user.id) throw new Error("That card is on Muqeet's queue.");
 
-  const status = params.outcome === "done" ? "done" : params.outcome === "skip" ? "skipped" : "follow_up";
-  const touchOutcome = params.outcome === "needs_follow_up" ? "talked_not_now" : "sent";
-  const reason =
-    params.outcome === "needs_follow_up"
-      ? "needs_follow_up"
-      : row.kind === "linkedin_request"
-        ? "connection_request"
-        : row.kind === "reply"
-          ? "reply_dm"
-          : `pipeline_${row.kind}`;
-
-  const touchId = await prisma.$transaction(async (tx) => {
-    await tx.pipelineTodayRow.update({ where: { id: row.id }, data: { status } });
-    if (params.outcome === "skip") return null;
-    const touch = await tx.touch.create({
-      data: {
-        organizationId: user.organizationId,
-        leadId: row.leadId,
-        userId: user.id,
-        channel: row.channel,
-        step: row.lead.cadenceStep,
-        outcome: touchOutcome,
-        reason,
-        occurredAt: new Date(),
-      },
-    });
-    if (params.outcome === "needs_follow_up") {
-      const deal = await tx.deal.findFirst({
-        where: { leadId: row.leadId, stage: { notIn: ["won", "lost"] } },
-      });
-      if (deal) {
-        await tx.deal.update({
-          where: { id: deal.id },
-          data: {
-            nextStepText: row.actionLabel.slice(0, 280),
-            nextStepAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
-        });
-      }
-    }
-    return touch.id;
-  });
-
-  if (params.outcome === "done" && row.kind !== "next_action") {
-    try {
-      await incrementDailyCount(user.id, user.organizationId, row.channel);
-    } catch (err) {
-      console.error("[pipeline-today] daily count failed", err instanceof Error ? err.message : "error");
-    }
-  }
-
-  const nextStep =
-    params.outcome === "skip"
-      ? null
-      : params.outcome === "needs_follow_up"
-        ? "needs_follow_up"
-        : row.kind === "reply"
-          ? "awaiting_reply"
-          : row.kind === "linkedin_request"
-            ? "email_or_wait_accept"
-            : row.kind === "next_action"
-              ? "done"
-              : "next_cadence";
-
-  const sheet = await trySheetDualWrite({
-    action: "pipeline_today_outcome",
-    leadId: row.leadId,
-    channel: row.channel,
-    outcome: params.outcome,
-    actorId: user.id,
-    nextStep,
-    contactName: row.contactName,
-    businessName: row.company,
-    note: row.actionLabel,
-    sheetRow: row.sheetRow,
-    timePkt: row.timeLabel,
-  });
-
-  await writeAuditLog({
+  const saved = await commitPipelineTodayOutcome({
     organizationId: user.organizationId,
     actorId: user.id,
-    action: "pipeline_today_outcome",
-    entityType: "lead",
-    entityId: row.leadId,
-    after: {
-      rowId: row.id,
-      sheetRow: row.sheetRow,
-      kind: row.kind,
-      outcome: params.outcome,
-      touchId,
-      sheetDualWrite: sheet.todo,
-    },
+    row,
+    outcome: params.outcome,
   });
   revalidateWork();
-  return { ok: true as const, touchId };
+  return { ok: true as const, touchId: saved.touchId };
 }
