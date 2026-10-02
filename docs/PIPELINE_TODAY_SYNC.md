@@ -1,6 +1,8 @@
 # Focus Today sync
 
-Muqeet's Focus queue comes from the Sales Pipeline **Today** tab. One sheet row is one card. The app never sends email, LinkedIn, or form submissions.
+The Sales Pipeline bot should push the day through [`docs/FOCUS_INGEST_API.md`](FOCUS_INGEST_API.md). That path does not need a Google service account. The sheet sync below remains as a fallback.
+
+Muqeet's Focus queue comes from the Sales Pipeline **Today** tab when someone syncs the sheet or pastes it. One sheet row is one card. The app never sends email, LinkedIn, or form submissions. A sheet sync only removes open rows it created. Cards written by the ingest API stay.
 
 ## Sheet
 

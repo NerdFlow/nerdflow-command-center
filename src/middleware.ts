@@ -16,6 +16,9 @@ export async function middleware(req: NextRequest) {
     // (see src/app/api/cron/lead-gen/route.ts) - not session auth, so it
     // must be exempted here or every call gets redirected to /login first.
     pathname.startsWith("/api/cron/") ||
+    // Bearer FOCUS_INGEST_SECRET, checked in the route. Not a session.
+    pathname.startsWith("/api/v1/focus/days/") ||
+    pathname.startsWith("/api/v1/focus/cards/") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/brand") ||
     pathname === "/favicon.ico";

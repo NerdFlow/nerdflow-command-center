@@ -68,6 +68,16 @@ jobs:
               echo "Added CRON_SECRET to .env"
             fi
 
+            # Sales Pipeline bot bearer token. Same rule as CRON_SECRET:
+            # write it only when the VPS line is missing or empty. Add the
+            # GitHub Actions secret FOCUS_INGEST_SECRET before the first deploy
+            # that should turn the ingest API on. See docs/FOCUS_INGEST_API.md.
+            if ! grep -q '^FOCUS_INGEST_SECRET=.\+' .env 2>/dev/null; then
+              sed -i.bak '/^FOCUS_INGEST_SECRET=/d' .env
+              echo 'FOCUS_INGEST_SECRET=${{ secrets.FOCUS_INGEST_SECRET }}' >> .env
+              echo "Added FOCUS_INGEST_SECRET to .env"
+            fi
+
             # Restart now, before backup/migrate, so the *old* process (which
             # may already be holding a full pool of connections) releases them
             # first. Restarting again at the end (after build) picks up the

@@ -1,8 +1,12 @@
-import type { LeadStatus } from "@prisma/client";
+import type { LeadStatus, Prisma, PrismaClient } from "@prisma/client";
 import { writeAuditLog } from "@/server/audit";
 import { prisma } from "@/server/db";
+
+export type PipelineWriter = PrismaClient | Prisma.TransactionClient;
 import type { CampaignStrategy } from "@/server/strategy";
 import {
+  PIPELINE_SPREADSHEET_ID,
+  PIPELINE_TODAY_SHEET_ID,
   mapPipelineGrid,
   pipelineExternalKey,
   pipelinePersonKey,
@@ -64,17 +68,17 @@ function keptStatus(current: LeadStatus): LeadStatus {
   return "in_cadence";
 }
 
-async function ensureCampaign(organizationId: string, ownerId: string) {
-  const existing = await prisma.campaign.findFirst({
+export async function ensurePipelineCampaign(db: PipelineWriter, organizationId: string, ownerId: string) {
+  const existing = await db.campaign.findFirst({
     where: { organizationId, name: PIPELINE_CAMPAIGN_NAME },
   });
   if (existing) return existing;
-  let product = await prisma.product.findFirst({
+  let product = await db.product.findFirst({
     where: { organizationId, status: "active" },
     orderBy: { createdAt: "asc" },
   });
   if (!product) {
-    product = await prisma.product.create({
+    product = await db.product.create({
       data: {
         organizationId,
         name: "NerdFlow",
@@ -83,7 +87,7 @@ async function ensureCampaign(organizationId: string, ownerId: string) {
       },
     });
   }
-  return prisma.campaign.create({
+  return db.campaign.create({
     data: {
       organizationId,
       productId: product.id,
@@ -98,10 +102,23 @@ async function ensureCampaign(organizationId: string, ownerId: string) {
   });
 }
 
-async function upsertLead(organizationId: string, ownerId: string, campaignId: string, row: MappedPipelineRow) {
+export async function upsertPipelineLead(
+  db: PipelineWriter,
+  organizationId: string,
+  ownerId: string,
+  campaignId: string,
+  row: MappedPipelineRow,
+  extra?: { dealCode?: string | null; source?: string },
+) {
   const dedupeKey = pipelinePersonKey(row.company, row.contactName);
-  const existing = await prisma.lead.findFirst({ where: { organizationId, dedupeKey } });
-  const signals = { ...asRecord(existing?.signals), pipelineToday: true };
+  const existing = await db.lead.findFirst({ where: { organizationId, dedupeKey } });
+  const dealCode = extra?.dealCode?.trim() || null;
+  const signals = {
+    ...asRecord(existing?.signals),
+    pipelineToday: true,
+    ...(extra?.source ? { pipelineTodaySource: extra.source } : {}),
+    ...(dealCode ? { pipelineDealCode: dealCode } : {}),
+  };
   const contact = {
     ...(row.contactName ? { contactName: row.contactName } : {}),
     ...(row.mailtoTo ? { email: row.mailtoTo } : {}),
@@ -109,7 +126,7 @@ async function upsertLead(organizationId: string, ownerId: string, campaignId: s
     ...(row.linkKind === "contact_form" && row.linkUrl ? { website: row.linkUrl, sourceUrl: row.linkUrl } : {}),
   };
   if (!existing) {
-    return prisma.lead.create({
+    return db.lead.create({
       data: {
         organizationId,
         campaignId,
@@ -133,7 +150,7 @@ async function upsertLead(organizationId: string, ownerId: string, campaignId: s
       },
     });
   }
-  return prisma.lead.update({
+  return db.lead.update({
     where: { id: existing.id },
     data: {
       ...contact,
@@ -170,13 +187,15 @@ export async function applyPipelineTodaySync(input: {
   const queueDate = pktDateStamp();
   const queueDay = queueDateAsUtc(queueDate);
   const mapped = mapPipelineGrid(input.grid);
-  const campaign = await ensureCampaign(input.organizationId, input.ownerId);
+  const campaign = await ensurePipelineCampaign(prisma, input.organizationId, input.ownerId);
   const seen = new Set<string>();
 
   for (const row of mapped.rows) {
     const externalKey = pipelineExternalKey(queueDate, row.sheetRow);
     seen.add(externalKey);
-    const lead = await upsertLead(input.organizationId, input.ownerId, campaign.id, row);
+    const lead = await upsertPipelineLead(prisma, input.organizationId, input.ownerId, campaign.id, row, {
+      source: input.source,
+    });
     const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
     const previous = await prisma.pipelineTodayRow.findUnique({
       where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey } },
@@ -212,13 +231,17 @@ export async function applyPipelineTodaySync(input: {
     });
   }
 
+  // Only sheet-keyed rows. An API rebuild uses card ids and must survive a later sheet sync.
   const dropped = await prisma.pipelineTodayRow.updateMany({
     where: {
       organizationId: input.organizationId,
       ownerId: input.ownerId,
       queueDate: queueDay,
       status: "open",
-      ...(seen.size > 0 ? { externalKey: { notIn: [...seen] } } : {}),
+      externalKey: {
+        startsWith: `${PIPELINE_SPREADSHEET_ID}:${PIPELINE_TODAY_SHEET_ID}:`,
+        ...(seen.size > 0 ? { notIn: [...seen] } : {}),
+      },
     },
     data: { status: "dropped" },
   });
