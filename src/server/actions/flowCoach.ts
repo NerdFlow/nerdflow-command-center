@@ -8,7 +8,7 @@ import { resolveLeadChannel } from "@/server/cadence";
 import { writeAuditLog } from "@/server/audit";
 import { renderMessage, type CampaignStrategy } from "@/server/strategy";
 import { coachReplyDraft, inferCoachChannel, noteSignalsInterest } from "@/lib/flowCoach";
-import { sheetDualWrite } from "@/server/sheetDualWrite";
+import { trySheetDualWrite } from "@/server/sheetDualWrite";
 import type { ShapeCard } from "@/lib/shapeCard";
 import type { Channel, LeadSource } from "@prisma/client";
 
@@ -108,13 +108,16 @@ export async function confirmFlowCoach(raw: z.input<typeof confirmSchema>) {
     dealId = deal.id;
   }
 
-  const sheet = sheetDualWrite({
+  const sheet = await trySheetDualWrite({
     action: "flow_coach_logged",
     leadId: lead.id,
     channel: replyChannel,
     outcome: "coach_logged",
     actorId: user.id,
     nextStep: "reply_card",
+    contactName: lead.contactName,
+    businessName: lead.businessName,
+    note: "flow_coach",
   });
 
   await writeAuditLog({

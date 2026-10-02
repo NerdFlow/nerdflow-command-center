@@ -2,16 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import type { Channel } from "@prisma/client";
+import type { Channel, Prisma } from "@prisma/client";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { resolveLeadChannel } from "@/server/cadence";
 import { writeAuditLog } from "@/server/audit";
 import { incrementDailyCount } from "@/server/targets";
 import { logTouchOutcome } from "@/server/actions/touches";
-import { sheetDualWrite } from "@/server/sheetDualWrite";
+import { trySheetDualWrite } from "@/server/sheetDualWrite";
 import type { CampaignStrategy } from "@/server/strategy";
-import { skipKeysFromSignals, todayActionKey, type TodayActionKind } from "@/lib/todayCards";
+import { followUpKeysFromSignals, skipKeysFromSignals, todayActionKey, type TodayActionKind } from "@/lib/todayCards";
 
 const doneSchema = z.object({
   leadId: z.string().min(1),
@@ -27,6 +27,13 @@ const skipSchema = z.object({
   leadId: z.string().min(1),
   actionKey: z.string().min(1).max(200),
   kind: z.string().max(40),
+});
+
+const followSchema = z.object({
+  leadId: z.string().min(1),
+  actionKey: z.string().min(1).max(200),
+  kind: z.enum(["reply", "follow_up", "next_action"]),
+  channel: z.enum(["email", "linkedin", "instagram", "call"]),
 });
 
 function revalidateWork() {
@@ -45,14 +52,20 @@ async function loadLead(leadId: string, organizationId: string) {
   return lead;
 }
 
-async function rememberSkip(leadId: string, signals: unknown, actionKey: string, present: boolean) {
+async function rememberSignalList(
+  leadId: string,
+  signals: unknown,
+  field: "shapeASkipKeys" | "shapeAFollowUpKeys",
+  actionKey: string,
+  present: boolean,
+) {
   const current = (signals as Record<string, unknown> | null) ?? {};
-  const keys = skipKeysFromSignals(current);
+  const keys = field === "shapeASkipKeys" ? skipKeysFromSignals(current) : followUpKeysFromSignals(current);
   const next = present ? (keys.includes(actionKey) ? keys : [...keys, actionKey]) : keys.filter((key) => key !== actionKey);
   if (next.length === keys.length && present) return;
   await prisma.lead.update({
     where: { id: leadId },
-    data: { signals: { ...current, shapeASkipKeys: next } },
+    data: { signals: { ...current, [field]: next } as Prisma.InputJsonValue },
   });
 }
 
@@ -171,15 +184,18 @@ export async function completeTodayRow(raw: z.input<typeof doneSchema>) {
 
   const actionKey = todayActionKey(lead.id, params.kind as TodayActionKind, params.replyId);
   const fresh = await prisma.lead.findFirst({ where: { id: lead.id }, select: { signals: true } });
-  await rememberSkip(lead.id, fresh?.signals, actionKey, false);
+  await rememberSignalList(lead.id, fresh?.signals, "shapeASkipKeys", actionKey, false);
 
-  const sheet = sheetDualWrite({
+  const sheet = await trySheetDualWrite({
     action: "today_row_done",
     leadId: lead.id,
     channel,
     outcome: "done",
     actorId: user.id,
     nextStep: params.kind === "reply" ? "awaiting_reply" : params.kind === "linkedin_request" ? "email_or_wait_accept" : "next_cadence",
+    contactName: lead.contactName,
+    businessName: lead.businessName,
+    note: params.kind,
   });
   await writeAuditLog({
     organizationId: user.organizationId,
@@ -197,14 +213,17 @@ export async function skipTodayRow(raw: z.input<typeof skipSchema>) {
   const params = skipSchema.parse(raw);
   const user = await requireUser();
   const lead = await loadLead(params.leadId, user.organizationId);
-  await rememberSkip(lead.id, lead.signals, params.actionKey, true);
-  const sheet = sheetDualWrite({
+  await rememberSignalList(lead.id, lead.signals, "shapeASkipKeys", params.actionKey, true);
+  const sheet = await trySheetDualWrite({
     action: "today_row_skipped",
     leadId: lead.id,
     channel: params.kind,
     outcome: "skip",
     actorId: user.id,
     nextStep: null,
+    contactName: lead.contactName,
+    businessName: lead.businessName,
+    note: params.kind,
   });
   await writeAuditLog({
     organizationId: user.organizationId,
@@ -216,4 +235,55 @@ export async function skipTodayRow(raw: z.input<typeof skipSchema>) {
   });
   revalidateWork();
   return { ok: true as const };
+}
+
+/** Warmer reply / follow-up. Logs the touch and drops the card. Does not advance cadence. */
+export async function followUpTodayRow(raw: z.input<typeof followSchema>) {
+  const params = followSchema.parse(raw);
+  const user = await requireUser();
+  const lead = await loadLead(params.leadId, user.organizationId);
+  const now = new Date();
+  const touch = await prisma.touch.create({
+    data: {
+      organizationId: user.organizationId,
+      leadId: lead.id,
+      userId: user.id,
+      channel: params.channel,
+      step: lead.cadenceStep,
+      outcome: "talked_not_now",
+      reason: "needs_follow_up",
+      occurredAt: now,
+    },
+  });
+  const deal = await prisma.deal.findFirst({
+    where: { leadId: lead.id, stage: { notIn: ["won", "lost"] } },
+  });
+  if (deal) {
+    await prisma.deal.update({
+      where: { id: deal.id },
+      data: { nextStepText: "Needs follow-up", nextStepAt: new Date(now.getTime() + 24 * 60 * 60 * 1000) },
+    });
+  }
+  await rememberSignalList(lead.id, lead.signals, "shapeAFollowUpKeys", params.actionKey, true);
+  const sheet = await trySheetDualWrite({
+    action: "today_row_follow_up",
+    leadId: lead.id,
+    channel: params.channel,
+    outcome: "needs_follow_up",
+    actorId: user.id,
+    nextStep: "needs_follow_up",
+    contactName: lead.contactName,
+    businessName: lead.businessName,
+    note: params.kind,
+  });
+  await writeAuditLog({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "today_row_follow_up",
+    entityType: "lead",
+    entityId: lead.id,
+    after: { kind: params.kind, actionKey: params.actionKey, touchId: touch.id, sheetDualWrite: sheet.todo },
+  });
+  revalidateWork();
+  return { ok: true as const, touchId: touch.id };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CampaignStrategy } from "@/server/strategy";
 import {
   SHAPE_A_DONE_SKIP_LABELS,
+  actionFromPipeline,
   actionHeader,
   actionOutcomeMode,
   actionShowsBlankMessage,
@@ -11,11 +12,13 @@ import {
   linkedinRequestReason,
   orderActions,
   pickerCounts,
+  projectTodayActions,
   shapeHeadline,
   shapeIntel,
   todayActionKey,
   type TodayShapeLead,
 } from "@/lib/todayCards";
+import type { PipelineCardView } from "@/lib/pipelineToday";
 
 const emailStrategy = {
   summary: "HVAC owners who need a CSR.",
@@ -119,10 +122,13 @@ describe("one card per Today row", () => {
 });
 
 describe("Shape A outcomes and copy", () => {
-  it("uses Done and Skip on email, LinkedIn request, and reply, and leaves Interested on Call", () => {
+  it("uses Done and Skip on cold rows, Needs follow-up on warmer rows, and leaves Interested on Call", () => {
     expect(actionOutcomeMode("send_email")).toBe("done_skip");
     expect(actionOutcomeMode("linkedin_request")).toBe("done_skip");
-    expect(actionOutcomeMode("reply")).toBe("done_skip");
+    expect(actionOutcomeMode("contact_form")).toBe("done_skip");
+    expect(actionOutcomeMode("reply")).toBe("done_skip_followup");
+    expect(actionOutcomeMode("follow_up")).toBe("done_skip_followup");
+    expect(actionOutcomeMode("next_action")).toBe("done_followup");
     expect(actionOutcomeMode("call")).toBe("call");
     expect(SHAPE_A_DONE_SKIP_LABELS).toEqual(["Done", "Skip"]);
     expect(SHAPE_A_DONE_SKIP_LABELS).not.toContain("Interested");
@@ -144,5 +150,46 @@ describe("Shape A outcomes and copy", () => {
       fitReasons: ["Reviews mention a CSR opening"],
       summary: "HVAC owners who need a CSR.",
     })).toBe("Owner · Austin, TX — Reviews mention a CSR opening");
+  });
+
+  it("hides Call for a rep whose Focus is pipeline-only and keeps one card per synced row", () => {
+    const withPhone = lead({ phone: "512-555-0199" });
+    const hidden = projectTodayActions({
+      lead: withPhone,
+      allowedChannels: ["call", "email", "linkedin"],
+      hideCall: true,
+    });
+    expect(hidden.some((action) => action.kind === "call")).toBe(false);
+    expect(hidden.map((action) => action.kind)).toEqual(["linkedin_request", "send_email"]);
+
+    const pipeline: PipelineCardView = {
+      rowId: "row-1",
+      sheetRow: 2,
+      timeLabel: "5:00 PM PKT",
+      actionLabel: "Send email",
+      kind: "send_email",
+      channel: "email",
+      linkKind: "mailto",
+      linkUrl: null,
+      mailtoTo: "ada@example.com",
+      mailtoSubject: "Hello",
+      message: "Hi Ada",
+      blankMessage: false,
+      connectNoNote: false,
+      outcomeMode: "done_skip",
+      intel: "Open in Titan and send it yourself.",
+      company: "Analytical Engines",
+    };
+    const synced = projectTodayActions({
+      pipeline,
+      lead: withPhone,
+      allowedChannels: ["call", "email"],
+      hideCall: true,
+    });
+    expect(synced).toHaveLength(1);
+    expect(synced[0]?.key).toBe("pipeline:row-1");
+    expect(actionFromPipeline("travis", pipeline).kind).toBe("send_email");
+    expect(actionVisible(synced[0]!, "email")).toBe(true);
+    expect(actionVisible(synced[0]!, "call")).toBe(false);
   });
 });

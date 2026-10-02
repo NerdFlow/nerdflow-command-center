@@ -6,7 +6,7 @@ import { computeFlags, STAGE_LABEL } from "@/server/deals";
 import { getOrgSettings } from "@/server/settings";
 import { zonedParts } from "@/server/cadence";
 import { loadFocusBoard } from "@/server/todayBoard";
-import { expandShapeLead, pickerCounts } from "@/lib/todayCards";
+import { pickerCounts, projectTodayActions } from "@/lib/todayCards";
 import { Chip, Ring, SectionLabel } from "@/components/ui";
 import { BriefVoiceLine } from "@/components/BriefVoiceLine";
 import { EndOfDayCard } from "@/components/EndOfDayCard";
@@ -92,8 +92,11 @@ export default async function TodayPage() {
   const allowed = ((user.channelsWorked as Channel[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
   const countByChannel = pickerCounts(
     board.cards.flatMap((card) =>
-      expandShapeLead(
-        {
+      projectTodayActions({
+        pipeline: card.pipeline,
+        hideCall: board.suppressCall,
+        allowedChannels: allowed,
+        lead: {
           id: card.lead.id,
           phone: card.lead.phone,
           email: card.lead.email,
@@ -109,15 +112,23 @@ export default async function TodayPage() {
           replyOnly: card.replyOnly,
           callAllowedNow: true,
         },
-        allowed,
-      ),
+      }),
     ),
   );
 
   const readyChannels = (["call", "email", "instagram", "linkedin"] as Channel[])
+    .filter((ch) => !(board.suppressCall && ch === "call"))
     .map((ch) => ({ ch, count: countByChannel[ch] ?? 0 }))
     .filter((c) => c.count > 0);
   const topChannel = readyChannels.sort((a, b) => b.count - a.count)[0];
+  const focusHref = board.suppressCall || !topChannel ? "/focus" : `/focus?channel=${topChannel.ch}`;
+  const focusLabel = board.suppressCall
+    ? countByChannel.all > 0
+      ? `Start Focus · ${countByChannel.all} ready`
+      : "Start a Focus session"
+    : topChannel
+      ? `Start ${CHANNEL_LABEL[topChannel.ch].toLowerCase()}s · ${topChannel.count} ready`
+      : "Start a Focus session";
 
   const nowLocal = zonedParts(new Date(), user.timezone);
   const workingHours = user.workingHours as { start: string; end: string };
@@ -154,13 +165,11 @@ export default async function TodayPage() {
                 ? `Answer ${openReplyCount === 1 ? "a reply waiting" : `${openReplyCount} replies waiting`} · ${Math.floor(replyAgeHours / 24)}d late`
                 : `Handle ${openReplyCount} ${openReplyCount === 1 ? "reply" : "replies"} first`}
             </Link>
-            {topChannel && (
+            {(board.suppressCall ? countByChannel.all > 0 : topChannel) && (
               <div>
-                <Link
-                  href={`/focus?channel=${topChannel.ch}`}
-                  className="quiet-link inline-flex items-center gap-1"
-                >
-                Or start {CHANNEL_LABEL[topChannel.ch] === "Call" ? "calls" : CHANNEL_LABEL[topChannel.ch].toLowerCase()} ({topChannel.count} ready) →
+                <Link href={focusHref} className="quiet-link inline-flex items-center gap-1">
+                  Or {focusLabel.charAt(0).toLowerCase()}
+                  {focusLabel.slice(1)} →
                 </Link>
               </div>
             )}
@@ -168,12 +177,10 @@ export default async function TodayPage() {
         ) : (
           <>
             <Link
-              href={topChannel ? `/focus?channel=${topChannel.ch}` : "/focus"}
+              href={focusHref}
               className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3.5 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
             >
-              {topChannel
-                ? `Start ${CHANNEL_LABEL[topChannel.ch].toLowerCase()}s · ${topChannel.count} ready`
-                : "Start a Focus session"}
+              {focusLabel}
             </Link>
             <div>
               <Link href="/campaigns" className="quiet-link">

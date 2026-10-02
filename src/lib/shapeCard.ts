@@ -1,3 +1,4 @@
+import type { PipelineCardView } from "@/lib/pipelineToday";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel, LeadSource } from "@prisma/client";
 
@@ -38,6 +39,8 @@ export type ShapeCard = {
   linkedinRequestSent: boolean;
   openReplies: ShapeReply[];
   replyOnly?: boolean;
+  /** Set when this card is one Sales Pipeline Today row. Skips cadence expansion. */
+  pipeline?: PipelineCardView;
 };
 
 export type CoachDirectoryLead = {

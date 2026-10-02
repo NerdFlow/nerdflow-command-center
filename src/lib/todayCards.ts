@@ -1,5 +1,6 @@
 import { resolveLeadChannel } from "@/server/cadence";
 import { whyThisLead } from "@/lib/focusCallCard";
+import type { PipelineCardView, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel } from "@prisma/client";
 import { leadHasPhone } from "@/lib/focusQueue";
@@ -7,8 +8,19 @@ import { leadHasPhone } from "@/lib/focusQueue";
 /**
  * One Today card is one action row. The same lead can produce a LinkedIn
  * request and a Send email in sequence. Call rows stay on the Call session.
+ * Pipeline Today rows add follow_up and next_action; those are not cadence steps.
  */
-export type TodayActionKind = "send_email" | "linkedin_request" | "reply" | "contact_form" | "call" | "instagram";
+export type TodayActionKind =
+  | "send_email"
+  | "linkedin_request"
+  | "reply"
+  | "contact_form"
+  | "call"
+  | "instagram"
+  | "follow_up"
+  | "next_action";
+
+export type TodayOutcomeMode = "call" | PipelineOutcomeMode;
 
 export type TodayAction = {
   key: string;
@@ -16,6 +28,10 @@ export type TodayAction = {
   kind: TodayActionKind;
   channel: Channel;
   replyId: string | null;
+  timeLabel?: string | null;
+  pipelineRowId?: string | null;
+  linkKind?: PipelineLinkKind | null;
+  outcomeMode?: PipelineOutcomeMode | null;
 };
 
 export type TodayReplyRef = {
@@ -58,7 +74,15 @@ export function contactFormUrl(signals: Record<string, unknown> | null | undefin
 }
 
 export function skipKeysFromSignals(signals: Record<string, unknown> | null | undefined): string[] {
-  const raw = signals?.shapeASkipKeys;
+  return stringListFromSignals(signals, "shapeASkipKeys");
+}
+
+export function followUpKeysFromSignals(signals: Record<string, unknown> | null | undefined): string[] {
+  return stringListFromSignals(signals, "shapeAFollowUpKeys");
+}
+
+function stringListFromSignals(signals: Record<string, unknown> | null | undefined, field: string): string[] {
+  const raw = signals?.[field];
   if (!Array.isArray(raw)) return [];
   return raw.filter((key): key is string => typeof key === "string" && key.length > 0);
 }
@@ -139,6 +163,12 @@ export function expandShapeLead(lead: TodayShapeLead, allowedChannels: Channel[]
 
 export function actionVisible(action: TodayAction, filter: Channel | "all"): boolean {
   if (filter === "all") return true;
+  if (action.kind === "next_action") return false;
+  if (action.kind === "follow_up") {
+    if (filter === "email") return action.linkKind === "mailto" || action.linkKind === "contact_form";
+    if (filter === "linkedin") return action.linkKind === "linkedin_profile";
+    return false;
+  }
   if (filter === "call") return action.kind === "call";
   if (filter === "email") {
     return action.kind === "send_email" || action.kind === "contact_form" || (action.kind === "reply" && action.channel === "email");
@@ -174,9 +204,48 @@ export function pickerCounts(actions: TodayAction[]): PickerCounts {
   };
 }
 
-/** Cold email, LinkedIn request, and reply cards. Call keeps its own outcomes. */
-export function actionOutcomeMode(kind: TodayActionKind): "call" | "done_skip" {
-  return kind === "call" ? "call" : "done_skip";
+/**
+ * Cold email, LinkedIn request, and contact form are Done / Skip.
+ * Reply and follow-up may also show Needs follow-up. Pipeline next actions
+ * are Done and Needs follow-up. Call keeps Interested and the other call outcomes.
+ */
+export function actionOutcomeMode(kind: TodayActionKind): TodayOutcomeMode {
+  if (kind === "call") return "call";
+  if (kind === "reply" || kind === "follow_up") return "done_skip_followup";
+  if (kind === "next_action") return "done_followup";
+  return "done_skip";
+}
+
+export function actionFromPipeline(leadId: string, view: PipelineCardView): TodayAction {
+  return {
+    key: `pipeline:${view.rowId}`,
+    leadId,
+    kind: view.kind,
+    channel: view.channel,
+    replyId: null,
+    timeLabel: view.timeLabel,
+    pipelineRowId: view.rowId,
+    linkKind: view.linkKind,
+    outcomeMode: view.outcomeMode,
+  };
+}
+
+/** Pipeline rows are the card. Cadence expansion is only for leads that are not a Today-tab row. */
+export function projectTodayActions(input: {
+  pipeline?: PipelineCardView | null;
+  lead: TodayShapeLead;
+  allowedChannels: Channel[];
+  hideCall?: boolean;
+}): TodayAction[] {
+  const actions = input.pipeline
+    ? [actionFromPipeline(input.lead.id, input.pipeline)]
+    : expandShapeLead(input.lead, input.allowedChannels);
+  const settled = new Set(followUpKeysFromSignals(input.lead.signals));
+  return actions.filter((action) => {
+    if (settled.has(action.key)) return false;
+    if (input.hideCall && action.kind === "call") return false;
+    return true;
+  });
 }
 
 export const SHAPE_A_DONE_SKIP_LABELS = ["Done", "Skip"] as const;
@@ -218,7 +287,7 @@ export function actionHeader(kind: TodayActionKind, businessName: string, clock:
   return clock;
 }
 
-export function actionKicker(kind: TodayActionKind): string {
+export function actionKicker(kind: TodayActionKind, actionLabel?: string | null): string {
   switch (kind) {
     case "send_email":
       return "Emailing";
@@ -230,6 +299,10 @@ export function actionKicker(kind: TodayActionKind): string {
       return "Contact form";
     case "instagram":
       return "Instagram DM";
+    case "follow_up":
+      return "Follow-up";
+    case "next_action":
+      return actionLabel?.trim() || "Next action";
     default:
       return "Calling";
   }

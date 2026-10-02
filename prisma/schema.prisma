@@ -248,6 +248,7 @@ model Organization {
   auditLogs     AuditLog[]
   notifications Notification[]
   settings      OrgSettings?
+  pipelineTodayRows PipelineTodayRow[]
 
   @@map("organizations")
 }
@@ -307,6 +308,7 @@ model User {
   notifications     Notification[]
   researchApproved  Research[]      @relation("ResearchApprovedBy")
   sessions          FocusSession[]
+  pipelineTodayRows PipelineTodayRow[]
 
   @@map("users")
 }
@@ -585,10 +587,50 @@ model Lead {
   deals         Deal[]
   conversations Conversation[]
   replies       Reply[]
+  pipelineTodayRows PipelineTodayRow[]
 
   @@index([dedupeKey])
   @@index([ownerId, status, nextTouchAt])
   @@map("leads")
+}
+
+/// One Sales Pipeline Today-tab row. One row is one Focus card, owned by Muqeet.
+model PipelineTodayRow {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String       @map("owner_id")
+  owner          User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  leadId         String       @map("lead_id")
+  lead           Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  /// Asia/Karachi calendar day of the queue, stored as a date.
+  queueDate      DateTime     @map("queue_date") @db.Date
+  /// 1-based row on the Today tab. Column G writeback uses this number.
+  sheetRow       Int          @map("sheet_row")
+  externalKey    String       @map("external_key")
+  timeLabel      String       @map("time_label")
+  contactName    String?      @map("contact_name")
+  company        String
+  actionLabel    String       @map("action_label")
+  kind           String
+  channel        Channel
+  linkKind       String       @map("link_kind")
+  linkUrl        String?      @map("link_url") @db.Text
+  mailtoTo       String?      @map("mailto_to")
+  mailtoSubject  String?      @map("mailto_subject") @db.Text
+  message        String       @default("") @db.Text
+  sheetDone      Boolean      @default(false) @map("sheet_done")
+  /// open | done | skipped | follow_up | dropped
+  status         String       @default("open")
+  outcomeMode    String       @map("outcome_mode")
+  intel          String       @db.Text
+  connectNoNote  Boolean      @default(false) @map("connect_no_note")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@unique([organizationId, externalKey])
+  @@index([ownerId, queueDate, status])
+  @@map("pipeline_today_rows")
 }
 
 model Touch {
