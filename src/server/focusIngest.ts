@@ -1,3 +1,4 @@
+import { focusRebuildTransactionOptions, withFocusRebuildRetry } from "@/lib/focusIngestTx";
 import { writeAuditLog } from "@/server/audit";
 import { prisma } from "@/server/db";
 import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
@@ -73,73 +74,80 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
   if (!plan.ok) throw new FocusIngestError(plan.status, plan.error, { cardId: plan.cardId });
 
   const byCard = new Map(input.accepted.map((card) => [card.cardId, card]));
-  const saved = await prisma.$transaction(async (tx) => {
-    const campaign = await ensurePipelineCampaign(tx, focusOwner.organizationId, focusOwner.id);
-    const ids: string[] = [];
-    const blockedRejected: RejectedCard[] = [];
-    for (const write of plan.writes) {
-      const card = byCard.get(write.cardId);
-      if (!card) continue;
-      if (write.preserved) {
-        ids.push(card.cardId);
-        continue;
-      }
-      const lead = await upsertPipelineLead(tx, focusOwner.organizationId, focusOwner.id, campaign.id, card.row, {
-        dealCode: card.dealCode,
-        source: input.source,
-      });
-      const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
-      const status = blocked ? "dropped" : write.status;
-      const data = {
-        ownerId: focusOwner.id,
-        leadId: lead.id,
-        queueDate: queueDay,
-        sheetRow: card.row.sheetRow,
-        timeLabel: card.row.timeLabel,
-        contactName: card.row.contactName || null,
-        company: card.row.company,
-        actionLabel: card.row.actionLabel,
-        kind: card.row.kind,
-        channel: card.row.channel,
-        linkKind: card.row.linkKind,
-        linkUrl: card.row.linkUrl,
-        mailtoTo: card.row.mailtoTo,
-        mailtoSubject: card.row.mailtoSubject,
-        message: card.row.message,
-        sheetDone: card.row.sheetDone,
-        status,
-        outcomeMode: card.row.outcomeMode,
-        intel: card.row.intel,
-        connectNoNote: card.row.connectNoNote,
-      };
-      await tx.pipelineTodayRow.upsert({
-        where: { organizationId_externalKey: { organizationId: focusOwner.organizationId, externalKey: card.cardId } },
-        create: { organizationId: focusOwner.organizationId, externalKey: card.cardId, ...data },
-        update: data,
-      });
-      if (blocked) {
-        blockedRejected.push({
-          cardId: card.cardId,
-          reason: lead.status === "not_fit" ? "not_a_fit" : "do_not_contact",
-        });
-      } else {
-        ids.push(card.cardId);
-      }
-    }
+  // One transaction so a failure cannot leave a half-replaced open queue.
+  // Options scale with accepted cards; Prisma's 5s default dies at ~10 cards on the pooler.
+  const saved = await withFocusRebuildRetry(() =>
+    prisma.$transaction(
+      async (tx) => {
+        const campaign = await ensurePipelineCampaign(tx, focusOwner.organizationId, focusOwner.id);
+        const ids: string[] = [];
+        const blockedRejected: RejectedCard[] = [];
+        for (const write of plan.writes) {
+          const card = byCard.get(write.cardId);
+          if (!card) continue;
+          if (write.preserved) {
+            ids.push(card.cardId);
+            continue;
+          }
+          const lead = await upsertPipelineLead(tx, focusOwner.organizationId, focusOwner.id, campaign.id, card.row, {
+            dealCode: card.dealCode,
+            source: input.source,
+          });
+          const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
+          const status = blocked ? "dropped" : write.status;
+          const data = {
+            ownerId: focusOwner.id,
+            leadId: lead.id,
+            queueDate: queueDay,
+            sheetRow: card.row.sheetRow,
+            timeLabel: card.row.timeLabel,
+            contactName: card.row.contactName || null,
+            company: card.row.company,
+            actionLabel: card.row.actionLabel,
+            kind: card.row.kind,
+            channel: card.row.channel,
+            linkKind: card.row.linkKind,
+            linkUrl: card.row.linkUrl,
+            mailtoTo: card.row.mailtoTo,
+            mailtoSubject: card.row.mailtoSubject,
+            message: card.row.message,
+            sheetDone: card.row.sheetDone,
+            status,
+            outcomeMode: card.row.outcomeMode,
+            intel: card.row.intel,
+            connectNoNote: card.row.connectNoNote,
+          };
+          await tx.pipelineTodayRow.upsert({
+            where: { organizationId_externalKey: { organizationId: focusOwner.organizationId, externalKey: card.cardId } },
+            create: { organizationId: focusOwner.organizationId, externalKey: card.cardId, ...data },
+            update: data,
+          });
+          if (blocked) {
+            blockedRejected.push({
+              cardId: card.cardId,
+              reason: lead.status === "not_fit" ? "not_a_fit" : "do_not_contact",
+            });
+          } else {
+            ids.push(card.cardId);
+          }
+        }
 
-    if (plan.dropKeys.length > 0) {
-      await tx.pipelineTodayRow.updateMany({
-        where: {
-          organizationId: focusOwner.organizationId,
-          ownerId: focusOwner.id,
-          queueDate: queueDay,
-          externalKey: { in: plan.dropKeys },
-        },
-        data: { status: "dropped" },
-      });
-    }
-    return { ids, blockedRejected };
-  });
+        if (plan.dropKeys.length > 0) {
+          await tx.pipelineTodayRow.updateMany({
+            where: {
+              organizationId: focusOwner.organizationId,
+              ownerId: focusOwner.id,
+              queueDate: queueDay,
+              externalKey: { in: plan.dropKeys },
+            },
+            data: { status: "dropped" },
+          });
+        }
+        return { ids, blockedRejected };
+      },
+      focusRebuildTransactionOptions(input.accepted.length),
+    ),
+  );
 
   const rejected = [...input.rejected, ...saved.blockedRejected];
   const cardIds = saved.ids;

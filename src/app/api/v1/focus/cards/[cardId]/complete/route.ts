@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse, type NextRequest } from "next/server";
 import { preflightComplete } from "@/lib/focusIngest";
+import { describeFocusIngestFailure } from "@/lib/focusIngestTx";
 import { applyFocusIngestComplete } from "@/server/focusIngest";
 import { FocusIngestError } from "@/server/pipelineTodayOutcome";
 
@@ -49,7 +50,8 @@ export async function POST(req: NextRequest, context: { params: { cardId: string
     if (err instanceof FocusIngestError) {
       return NextResponse.json({ error: err.message, ...err.extra }, { status: err.status });
     }
-    console.error("[focus-ingest] complete failed");
-    return NextResponse.json({ error: "Couldn't record that outcome" }, { status: 500 });
+    const failure = describeFocusIngestFailure(err, "Couldn't record that outcome");
+    console.error("[focus-ingest] complete failed", failure.log);
+    return NextResponse.json(failure.body, { status: failure.status });
   }
 }

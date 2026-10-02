@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse, type NextRequest } from "next/server";
 import { preflightRebuild } from "@/lib/focusIngest";
+import { describeFocusIngestFailure } from "@/lib/focusIngestTx";
 import { applyFocusIngestRebuild } from "@/server/focusIngest";
 import { FocusIngestError } from "@/server/pipelineTodayOutcome";
 
@@ -43,8 +44,10 @@ async function rebuild(req: NextRequest, datePkt: string) {
     if (err instanceof FocusIngestError) {
       return NextResponse.json({ error: err.message, ...err.extra }, { status: err.status });
     }
-    console.error("[focus-ingest] rebuild failed");
-    return NextResponse.json({ error: "Couldn't save the Today queue" }, { status: 500 });
+    const failure = describeFocusIngestFailure(err, "Couldn't save the Today queue");
+    // Code, name, and message only. Invocation args are omitted so card bodies stay out of the log.
+    console.error("[focus-ingest] rebuild failed", failure.log);
+    return NextResponse.json(failure.body, { status: failure.status });
   }
 }
 
