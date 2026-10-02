@@ -121,18 +121,15 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
   const queueDay = queueDateAsUtc(queueDate);
   const sync = suppressCall && focusOwner ? await loadSyncState(ownerId, organizationId, focusOwner.fullName, queueDate) : null;
 
-  if (suppressCall) {
-    const syncedToday = await prisma.pipelineTodayRow.count({ where: { organizationId, ownerId, queueDate: queueDay } });
-    if (syncedToday > 0) {
-      const rows = await prisma.pipelineTodayRow.findMany({
+  // Only open rows are pipeline cards. Counting done, skipped, follow-up, or
+  // dropped rows used to hide the regular Focus queue for the rest of the day.
+  const pipelineRows = suppressCall
+    ? await prisma.pipelineTodayRow.findMany({
         where: { organizationId, ownerId, queueDate: queueDay, status: "open" },
         orderBy: { sheetRow: "asc" },
         include: { lead: { include: { campaign: { include: { product: true } } } } },
-      });
-      const coachLeads = await loadCoachDirectory(ownerId, organizationId);
-      return { cards: rows.map(pipelineCard), coachLeads, suppressCall: true, sync };
-    }
-  }
+      })
+    : [];
 
   const queue = await getQueueForUser(ownerId, 50);
   const queueIds = queue.map((item) => item.lead.id);
@@ -179,40 +176,43 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
     repliesByLead.set(reply.leadId, list);
   }
 
-  const cards: ShapeCard[] = queue.map(({ lead, campaign, label }) => ({
-    lead: {
-      id: lead.id,
-      businessName: lead.businessName,
-      contactName: lead.contactName,
-      contactRole: lead.contactRole,
-      city: lead.city,
-      region: lead.region,
-      country: lead.country,
-      cadenceStep: lead.cadenceStep,
-      nextChannelOverride: lead.nextChannelOverride,
-      signals: asSignals(lead.signals),
-      phone: lead.phone,
-      email: lead.email,
-      instagramUrl: lead.instagramUrl,
-      linkedinUrl: lead.linkedinUrl,
-      website: lead.website,
-      sourceUrl: lead.sourceUrl,
-      fitScore: lead.fitScore,
-      fitReasons: (lead.fitReasons as string[] | null) ?? [],
-      fitFlags: (lead.fitFlags as string[] | null) ?? [],
-      source: lead.source,
-      lastTouchLabel: formatLastTouch(lead.touches[0] ?? null),
-    },
-    campaign: {
-      id: campaign.id,
-      name: campaign.name,
-      productName: campaign.product.name,
-      strategy: asStrategy(campaign.strategy),
-    },
-    label,
-    linkedinRequestSent: linkedinSent.has(lead.id),
-    openReplies: repliesByLead.get(lead.id) ?? [],
-  }));
+  const cards: ShapeCard[] = [
+    ...pipelineRows.map(pipelineCard),
+    ...queue.map(({ lead, campaign, label }) => ({
+      lead: {
+        id: lead.id,
+        businessName: lead.businessName,
+        contactName: lead.contactName,
+        contactRole: lead.contactRole,
+        city: lead.city,
+        region: lead.region,
+        country: lead.country,
+        cadenceStep: lead.cadenceStep,
+        nextChannelOverride: lead.nextChannelOverride,
+        signals: asSignals(lead.signals),
+        phone: lead.phone,
+        email: lead.email,
+        instagramUrl: lead.instagramUrl,
+        linkedinUrl: lead.linkedinUrl,
+        website: lead.website,
+        sourceUrl: lead.sourceUrl,
+        fitScore: lead.fitScore,
+        fitReasons: (lead.fitReasons as string[] | null) ?? [],
+        fitFlags: (lead.fitFlags as string[] | null) ?? [],
+        source: lead.source,
+        lastTouchLabel: formatLastTouch(lead.touches[0] ?? null),
+      },
+      campaign: {
+        id: campaign.id,
+        name: campaign.name,
+        productName: campaign.product.name,
+        strategy: asStrategy(campaign.strategy),
+      },
+      label,
+      linkedinRequestSent: linkedinSent.has(lead.id),
+      openReplies: repliesByLead.get(lead.id) ?? [],
+    })),
+  ];
 
   const queued = new Set(queueIds);
   for (const reply of replies) {
@@ -259,23 +259,6 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
   const coachLeads = directory.map(coachLeadFromRow);
 
   return { cards, coachLeads, suppressCall, sync };
-}
-
-async function loadCoachDirectory(ownerId: string, organizationId: string): Promise<CoachDirectoryLead[]> {
-  const directory = await prisma.lead.findMany({
-    where: { ownerId, organizationId, status: { in: ["queued", "in_cadence", "replied", "deal"] } },
-    select: {
-      id: true,
-      contactName: true,
-      businessName: true,
-      cadenceStep: true,
-      nextChannelOverride: true,
-      campaign: { select: { strategy: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 200,
-  });
-  return directory.map(coachLeadFromRow);
 }
 
 function coachLeadFromRow(lead: {
