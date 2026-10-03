@@ -1,6 +1,8 @@
 import type { LeadStatus, Prisma, PrismaClient } from "@prisma/client";
+import { selectRoutedCards } from "@/lib/focusRouting";
 import { writeAuditLog } from "@/server/audit";
 import { prisma } from "@/server/db";
+import { loadRouteReps } from "@/server/focusRouting";
 
 export type PipelineWriter = PrismaClient | Prisma.TransactionClient;
 import type { CampaignStrategy } from "@/server/strategy";
@@ -135,6 +137,7 @@ export async function upsertPipelineLead(
         businessName: row.company,
         contactName: row.contactName || null,
         email: row.mailtoTo,
+        phone: row.phone,
         linkedinUrl: row.linkKind === "linkedin_profile" ? row.linkUrl : null,
         website: row.linkKind === "contact_form" ? row.linkUrl : null,
         sourceUrl: row.linkKind === "contact_form" ? row.linkUrl : null,
@@ -154,7 +157,7 @@ export async function upsertPipelineLead(
     where: { id: existing.id },
     data: {
       ...contact,
-      ownerId,
+      ...(row.phone ? { phone: row.phone } : {}),
       signals,
       businessName: row.company || existing.businessName,
       status: keptStatus(existing.status),
@@ -173,60 +176,86 @@ function rowStatus(sheetDone: boolean, previous: string | undefined, blocked: bo
 }
 
 /**
- * Replace Muqeet's Focus Today queue with these Today-tab rows.
- * The sheet is the approved list, so leads skip the inbox and stay out of the
- * cadence queue (in_cadence, no next touch, fit score 0).
+ * Replace today's sheet-backed Focus cards and route each one by channel.
+ * Leads skip the inbox. Routing does not change an existing lead's owner.
  */
 export async function applyPipelineTodaySync(input: {
   organizationId: string;
   actorId: string;
-  ownerId: string;
   source: "sheets" | "paste";
   grid: string[][];
 }): Promise<PipelineSyncSummary> {
   const queueDate = pktDateStamp();
   const queueDay = queueDateAsUtc(queueDate);
   const mapped = mapPipelineGrid(input.grid);
-  const campaign = await ensurePipelineCampaign(prisma, input.organizationId, input.ownerId);
+  const cards = mapped.rows.map((row) => ({ cardId: pipelineExternalKey(queueDate, row.sheetRow), row }));
+  const personKeys = [...new Set(cards.map((card) => pipelinePersonKey(card.row.company, card.row.contactName)))];
+  const [{ reps, defaultCap, fallbackOwnerId }, existingLeads, existingRows] = await Promise.all([
+    loadRouteReps(input.organizationId, queueDay),
+    personKeys.length === 0
+      ? Promise.resolve([])
+      : prisma.lead.findMany({
+          where: { organizationId: input.organizationId, dedupeKey: { in: personKeys } },
+          select: { dedupeKey: true, ownerId: true },
+        }),
+    cards.length === 0
+      ? Promise.resolve([])
+      : prisma.pipelineTodayRow.findMany({
+          where: { organizationId: input.organizationId, externalKey: { in: cards.map((card) => card.cardId) } },
+          select: { externalKey: true, status: true, ownerId: true },
+        }),
+  ]);
+  if (!fallbackOwnerId) throw new Error("No active users to route Today cards");
+  const campaign = await ensurePipelineCampaign(prisma, input.organizationId, fallbackOwnerId);
+  const locked = new Map<string, string>();
+  for (const row of existingRows) {
+    if (TERMINAL.has(row.status)) locked.set(row.externalKey, row.ownerId);
+  }
+  const decision = selectRoutedCards({
+    cards,
+    leadOwners: new Map(existingLeads.map((lead) => [lead.dedupeKey, lead.ownerId])),
+    hintOwnerId: null,
+    fallbackOwnerId,
+    reps,
+    defaultCap,
+    locked,
+  });
   const seen = new Set<string>();
 
-  for (const row of mapped.rows) {
-    const externalKey = pipelineExternalKey(queueDate, row.sheetRow);
-    seen.add(externalKey);
-    const lead = await upsertPipelineLead(prisma, input.organizationId, input.ownerId, campaign.id, row, {
+  for (const card of decision.routed) {
+    seen.add(card.cardId);
+    const lead = await upsertPipelineLead(prisma, input.organizationId, card.leadOwnerId, campaign.id, card.row, {
       source: input.source,
     });
     const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
-    const previous = await prisma.pipelineTodayRow.findUnique({
-      where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey } },
-      select: { status: true },
-    });
-    const status = rowStatus(row.sheetDone, previous?.status, blocked);
+    const previous = existingRows.find((row) => row.externalKey === card.cardId);
+    const status = rowStatus(card.row.sheetDone, previous?.status, blocked);
+    const assigneeId = previous && TERMINAL.has(previous.status) ? previous.ownerId : card.assigneeId;
     const data = {
-      ownerId: input.ownerId,
+      ownerId: assigneeId,
       leadId: lead.id,
       queueDate: queueDay,
-      sheetRow: row.sheetRow,
-      timeLabel: row.timeLabel,
-      contactName: row.contactName || null,
-      company: row.company,
-      actionLabel: row.actionLabel,
-      kind: row.kind,
-      channel: row.channel,
-      linkKind: row.linkKind,
-      linkUrl: row.linkUrl,
-      mailtoTo: row.mailtoTo,
-      mailtoSubject: row.mailtoSubject,
-      message: row.message,
-      sheetDone: row.sheetDone,
+      sheetRow: card.row.sheetRow,
+      timeLabel: card.row.timeLabel,
+      contactName: card.row.contactName || null,
+      company: card.row.company,
+      actionLabel: card.row.actionLabel,
+      kind: card.row.kind,
+      channel: card.row.channel,
+      linkKind: card.row.linkKind,
+      linkUrl: card.row.linkUrl,
+      mailtoTo: card.row.mailtoTo,
+      mailtoSubject: card.row.mailtoSubject,
+      message: card.row.message,
+      sheetDone: card.row.sheetDone,
       status,
-      outcomeMode: row.outcomeMode,
-      intel: row.intel,
-      connectNoNote: row.connectNoNote,
+      outcomeMode: card.row.outcomeMode,
+      intel: card.row.intel,
+      connectNoNote: card.row.connectNoNote,
     };
     await prisma.pipelineTodayRow.upsert({
-      where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey } },
-      create: { organizationId: input.organizationId, externalKey, ...data },
+      where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey: card.cardId } },
+      create: { organizationId: input.organizationId, externalKey: card.cardId, ...data },
       update: data,
     });
   }
@@ -235,7 +264,6 @@ export async function applyPipelineTodaySync(input: {
   const dropped = await prisma.pipelineTodayRow.updateMany({
     where: {
       organizationId: input.organizationId,
-      ownerId: input.ownerId,
       queueDate: queueDay,
       status: "open",
       externalKey: {
@@ -247,17 +275,17 @@ export async function applyPipelineTodaySync(input: {
   });
 
   const open = await prisma.pipelineTodayRow.count({
-    where: { organizationId: input.organizationId, ownerId: input.ownerId, queueDate: queueDay, status: "open" },
+    where: { organizationId: input.organizationId, queueDate: queueDay, status: "open" },
   });
 
   const summary: PipelineSyncSummary = {
     source: input.source,
     queueDate,
-    stored: mapped.rows.length,
+    stored: decision.routed.length,
     open,
-    sheetDone: mapped.rows.filter((row) => row.sheetDone).length,
+    sheetDone: decision.routed.filter((card) => card.row.sheetDone).length,
     dropped: dropped.count,
-    filteredCalls: mapped.filteredCalls,
+    filteredCalls: 0,
     blankSkipped: mapped.blankSkipped,
   };
 
@@ -266,8 +294,17 @@ export async function applyPipelineTodaySync(input: {
     actorId: input.actorId,
     action: "pipeline_today_synced",
     entityType: "user",
-    entityId: input.ownerId,
-    after: summary,
+    entityId: input.actorId,
+    after: {
+      ...summary,
+      routes: decision.routed.map((card) => ({
+        cardId: card.cardId,
+        assigneeId: card.assigneeId,
+        leadOwnerId: card.leadOwnerId,
+        slot: card.slot,
+      })),
+      rejected: decision.rejected,
+    },
   });
 
   return summary;

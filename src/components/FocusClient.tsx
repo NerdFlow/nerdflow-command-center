@@ -122,7 +122,6 @@ export function FocusClient({
   initialChannel,
   coachLeads = [],
   assistantName = "Flow",
-  suppressCall = false,
   sync = null,
 }: {
   initialCards: Card[];
@@ -132,18 +131,23 @@ export function FocusClient({
   initialChannel?: Channel | "all";
   coachLeads?: CoachDirectoryLead[];
   assistantName?: string;
-  suppressCall?: boolean;
   sync?: FocusSyncState | null;
 }) {
   const router = useRouter();
-  const [cards, setCards] = useState(() => initialCards.filter((c) => c.replyOnly || cardInRepQueue(c, allowedChannels)));
+  const worksCall = allowedChannels.includes("call");
+  const [cards, setCards] = useState(() =>
+    initialCards.filter((c) => {
+      if (c.pipeline) return c.pipeline.channel !== "call" || worksCall;
+      return c.replyOnly || cardInRepQueue(c, allowedChannels);
+    }),
+  );
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => initialCards.flatMap((card) => followUpKeysFromSignals(card.lead.signals)));
   const [deferredKeys, setDeferredKeys] = useState<string[]>(() => initialCards.flatMap((card) => skipKeysFromSignals(card.lead.signals)));
   const [pinnedKeys, setPinnedKeys] = useState<string[]>([]);
   const [coachOpen, setCoachOpen] = useState(false);
   const shapeInFlight = useRef(new Set<string>());
   const [channelFilter, setChannelFilter] = useState<Channel | "all">(() => {
-    if (suppressCall && initialChannel === "call") return "all";
+    if (initialChannel === "call" && !allowedChannels.includes("call")) return "all";
     if (initialChannel && initialChannel !== "all" && allowedChannels.includes(initialChannel)) return initialChannel;
     if (initialChannel === "all") return "all";
     return "all";
@@ -181,7 +185,7 @@ export function FocusClient({
       const callAllowedNow = !businessHoursOnly || leadLocalTimeStatus(card.lead, repTimezone).inBusinessHours;
       return projectTodayActions({
         pipeline: card.pipeline,
-        hideCall: suppressCall,
+        hideCall: !worksCall,
         allowedChannels,
         lead: {
           id: card.lead.id,
@@ -213,7 +217,7 @@ export function FocusClient({
       const row = byKey.get(action.key);
       return row ? [row] : [];
     });
-  }, [cards, sourceFilter, businessHoursOnly, repTimezone, allowedChannels, hiddenKeys, deferredKeys, pinnedKeys, suppressCall]);
+  }, [cards, sourceFilter, businessHoursOnly, repTimezone, allowedChannels, hiddenKeys, deferredKeys, pinnedKeys, worksCall]);
 
   const shapeCounts = useMemo(() => pickerCounts(shapeRows.map((row) => row.action)), [shapeRows]);
 
@@ -405,7 +409,7 @@ export function FocusClient({
       return;
     }
     const kind = row.action.kind;
-    if (kind === "call" || kind === "follow_up" || kind === "next_action") return;
+    if (kind === "call" || kind === "follow_up" || kind === "next_action" || kind === "needs_contact") return;
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
@@ -463,6 +467,7 @@ export function FocusClient({
       scriptUsed: script.variant,
       scriptId: script.scriptId,
       callerNote: note ?? undefined,
+      pipelineRowId: row.action.pipelineRowId ?? undefined,
     })
       .then((res) => {
         if (res.touchId) setPendingRating({ touchId: res.touchId, businessName: row.card.lead.businessName });
@@ -557,9 +562,7 @@ export function FocusClient({
                 { channel: "all" as const, label: "Everything", count: shapeCounts.all },
                 { channel: "email" as const, label: "Email", count: shapeCounts.email },
                 { channel: "linkedin" as const, label: "LinkedIn", count: shapeCounts.linkedin },
-                ...(suppressCall
-                  ? []
-                  : [{ channel: "call" as const, label: "Call", count: allowedChannels.includes("call") ? countByChannel.call : 0 }]),
+                ...(worksCall ? [{ channel: "call" as const, label: "Call", count: countByChannel.call }] : []),
               ] as const
             ).map((tile) => (
               <button
@@ -612,7 +615,7 @@ export function FocusClient({
             </div>
           </div>
           {sync && <TodaySyncPanel sync={sync} />}
-          {!suppressCall && (
+          {worksCall && (
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -706,7 +709,7 @@ export function FocusClient({
           conversations={conversations}
           businessHoursOnly={businessHoursOnly}
           onToggleHours={setBusinessHoursOnly}
-          showHours={channelFilter === "all" && !suppressCall}
+          showHours={channelFilter === "all" && worksCall}
           error={error}
           pendingRating={pendingRating}
           onRate={(rating) => void rate(rating)}

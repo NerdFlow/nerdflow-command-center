@@ -1,7 +1,9 @@
+import { matchOwnerHint, selectRoutedCards } from "@/lib/focusRouting";
 import { focusRebuildTransactionOptions, withFocusRebuildRetry } from "@/lib/focusIngestTx";
+import { pipelinePersonKey, dateStampFromDb, queueDateAsUtc } from "@/lib/pipelineToday";
 import { writeAuditLog } from "@/server/audit";
 import { prisma } from "@/server/db";
-import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
+import { loadRouteReps } from "@/server/focusRouting";
 import { ensurePipelineCampaign, upsertPipelineLead } from "@/server/pipelineTodaySync";
 import { FocusIngestError, commitPipelineTodayOutcome } from "@/server/pipelineTodayOutcome";
 import {
@@ -12,12 +14,14 @@ import {
   type RejectedCard,
   type StoredFocusCard,
 } from "@/lib/focusIngest";
-import { dateStampFromDb, queueDateAsUtc } from "@/lib/pipelineToday";
+
+const TERMINAL = new Set(["done", "skipped", "follow_up"]);
 
 export type RebuildApplyInput = {
   datePkt: string;
   source: string;
   force: boolean;
+  ownerHint?: string | null;
   accepted: AcceptedFocusCard[];
   rejected: RejectedCard[];
 };
@@ -27,6 +31,7 @@ export type RebuildApplyResult = {
   cardIds: string[];
   rejected: RejectedCard[];
   queueDate: string;
+  routes: { cardId: string; assigneeId: string; leadOwnerId: string; slot: string }[];
 };
 
 function storedFromRow(row: { externalKey: string; queueDate: Date; status: string; ownerId: string }): StoredFocusCard {
@@ -40,46 +45,80 @@ function storedFromRow(row: { externalKey: string; queueDate: Date; status: stri
 
 export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise<RebuildApplyResult> {
   const orgs = await prisma.organization.findMany({ select: { id: true }, orderBy: { createdAt: "asc" } });
-  let owner: Awaited<ReturnType<typeof resolveFocusTodayOwner>> = null;
-  for (const org of orgs) {
-    owner = await resolveFocusTodayOwner(org.id);
-    if (owner) break;
-  }
-  if (!owner) throw new FocusIngestError(404, "Muqeet was not found");
-  const focusOwner = owner;
-
-  const keys = input.accepted.map((card) => card.cardId);
+  let organizationId: string | null = null;
+  let loaded: Awaited<ReturnType<typeof loadRouteReps>> | null = null;
   const queueDay = queueDateAsUtc(input.datePkt);
-  const [byKey, sameDay] = await Promise.all([
+  const keys = input.accepted.map((card) => card.cardId);
+  for (const org of orgs) {
+    const snapshot = await loadRouteReps(org.id, queueDay, { skipKeys: new Set(keys), force: input.force });
+    if (snapshot.users.length > 0) {
+      organizationId = org.id;
+      loaded = snapshot;
+      break;
+    }
+  }
+  if (!organizationId || !loaded?.fallbackOwnerId) throw new FocusIngestError(404, "No active users to route Focus cards");
+  const orgId = organizationId;
+  const route = loaded;
+
+  const personKeys = [...new Set(input.accepted.map((card) => pipelinePersonKey(card.row.company, card.row.contactName)))];
+  const [byKey, sameDay, existingLeads] = await Promise.all([
     keys.length === 0
       ? Promise.resolve([])
       : prisma.pipelineTodayRow.findMany({
-          where: { organizationId: focusOwner.organizationId, externalKey: { in: keys } },
+          where: { organizationId: orgId, externalKey: { in: keys } },
         }),
     prisma.pipelineTodayRow.findMany({
-      where: { organizationId: focusOwner.organizationId, ownerId: focusOwner.id, queueDate: queueDay },
+      where: { organizationId: orgId, queueDate: queueDay },
     }),
+    personKeys.length === 0
+      ? Promise.resolve([])
+      : prisma.lead.findMany({
+          where: { organizationId: orgId, dedupeKey: { in: personKeys } },
+          select: { dedupeKey: true, ownerId: true },
+        }),
   ]);
 
   const existing = new Map<string, StoredFocusCard>();
   for (const row of [...sameDay, ...byKey]) existing.set(row.externalKey, storedFromRow(row));
 
+  const locked = new Map<string, string>();
+  if (!input.force) {
+    for (const row of existing.values()) {
+      if (row.queueDate === input.datePkt && TERMINAL.has(row.status) && keys.includes(row.externalKey)) {
+        locked.set(row.externalKey, row.ownerId);
+      }
+    }
+  }
+
+  const hint = matchOwnerHint(route.users, input.ownerHint);
+  const decision = selectRoutedCards({
+    cards: input.accepted,
+    leadOwners: new Map(existingLeads.map((lead) => [lead.dedupeKey, lead.ownerId])),
+    hintOwnerId: hint?.id ?? null,
+    fallbackOwnerId: route.fallbackOwnerId,
+    reps: route.reps,
+    defaultCap: route.defaultCap,
+    locked,
+  });
+  const rejected = [...input.rejected, ...decision.rejected];
+  if (input.accepted.length > 0 && decision.routed.length === 0) {
+    throw new FocusIngestError(422, "No cards accepted", { rejected });
+  }
+
   const plan = planFocusRebuild({
     datePkt: input.datePkt,
-    ownerId: focusOwner.id,
-    cards: input.accepted.map((card) => ({ cardId: card.cardId, done: card.row.sheetDone })),
+    cards: decision.routed.map((card) => ({ cardId: card.cardId, done: card.row.sheetDone, assigneeId: card.assigneeId })),
     existing: [...existing.values()],
     force: input.force,
   });
   if (!plan.ok) throw new FocusIngestError(plan.status, plan.error, { cardId: plan.cardId });
 
-  const byCard = new Map(input.accepted.map((card) => [card.cardId, card]));
-  // One transaction so a failure cannot leave a half-replaced open queue.
-  // Options scale with accepted cards; Prisma's 5s default dies at ~10 cards on the pooler.
+  const byCard = new Map(decision.routed.map((card) => [card.cardId, card]));
   const saved = await withFocusRebuildRetry(() =>
     prisma.$transaction(
       async (tx) => {
-        const campaign = await ensurePipelineCampaign(tx, focusOwner.organizationId, focusOwner.id);
+        const campaign = await ensurePipelineCampaign(tx, orgId, route.fallbackOwnerId!);
         const ids: string[] = [];
         const blockedRejected: RejectedCard[] = [];
         for (const write of plan.writes) {
@@ -89,14 +128,14 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
             ids.push(card.cardId);
             continue;
           }
-          const lead = await upsertPipelineLead(tx, focusOwner.organizationId, focusOwner.id, campaign.id, card.row, {
-            dealCode: card.dealCode,
+          const lead = await upsertPipelineLead(tx, orgId, card.leadOwnerId, campaign.id, card.row, {
+            dealCode: input.accepted.find((item) => item.cardId === card.cardId)?.dealCode ?? null,
             source: input.source,
           });
           const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
           const status = blocked ? "dropped" : write.status;
           const data = {
-            ownerId: focusOwner.id,
+            ownerId: write.assigneeId,
             leadId: lead.id,
             queueDate: queueDay,
             sheetRow: card.row.sheetRow,
@@ -118,8 +157,8 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
             connectNoNote: card.row.connectNoNote,
           };
           await tx.pipelineTodayRow.upsert({
-            where: { organizationId_externalKey: { organizationId: focusOwner.organizationId, externalKey: card.cardId } },
-            create: { organizationId: focusOwner.organizationId, externalKey: card.cardId, ...data },
+            where: { organizationId_externalKey: { organizationId: orgId, externalKey: card.cardId } },
+            create: { organizationId: orgId, externalKey: card.cardId, ...data },
             update: data,
           });
           if (blocked) {
@@ -135,8 +174,7 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
         if (plan.dropKeys.length > 0) {
           await tx.pipelineTodayRow.updateMany({
             where: {
-              organizationId: focusOwner.organizationId,
-              ownerId: focusOwner.id,
+              organizationId: orgId,
               queueDate: queueDay,
               externalKey: { in: plan.dropKeys },
             },
@@ -145,19 +183,27 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
         }
         return { ids, blockedRejected };
       },
-      focusRebuildTransactionOptions(input.accepted.length),
+      focusRebuildTransactionOptions(decision.routed.length),
     ),
   );
 
-  const rejected = [...input.rejected, ...saved.blockedRejected];
+  const allRejected = [...rejected, ...saved.blockedRejected];
   const cardIds = saved.ids;
+  const routes = decision.routed
+    .filter((card) => cardIds.includes(card.cardId))
+    .map((card) => ({
+      cardId: card.cardId,
+      assigneeId: plan.writes.find((write) => write.cardId === card.cardId)?.assigneeId ?? card.assigneeId,
+      leadOwnerId: card.leadOwnerId,
+      slot: card.slot,
+    }));
 
   await writeAuditLog({
-    organizationId: focusOwner.organizationId,
-    actorId: focusOwner.id,
+    organizationId: orgId,
+    actorId: route.fallbackOwnerId,
     action: "pipeline_today_synced",
     entityType: "user",
-    entityId: focusOwner.id,
+    entityId: route.fallbackOwnerId,
     after: {
       source: input.source,
       queueDate: input.datePkt,
@@ -165,11 +211,12 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
       stored: cardIds.length,
       dropped: plan.dropKeys.length,
       force: input.force,
-      rejected: rejected.map((item) => ({ cardId: item.cardId, reason: item.reason })),
+      rejected: allRejected.map((item) => ({ cardId: item.cardId, reason: item.reason })),
+      routes,
     },
   });
 
-  return { accepted: cardIds.length, cardIds, rejected, queueDate: input.datePkt };
+  return { accepted: cardIds.length, cardIds, rejected: allRejected, queueDate: input.datePkt, routes };
 }
 
 export async function applyFocusIngestComplete(input: {
@@ -179,26 +226,17 @@ export async function applyFocusIngestComplete(input: {
   note: string | null;
   occurredAt: Date | null;
 }): Promise<{ cardId: string; outcome: FocusOutcome; status: string; idempotent: boolean; touchId: string | null }> {
-  const orgs = await prisma.organization.findMany({ select: { id: true }, orderBy: { createdAt: "asc" } });
-  let owner: Awaited<ReturnType<typeof resolveFocusTodayOwner>> = null;
-  for (const org of orgs) {
-    owner = await resolveFocusTodayOwner(org.id);
-    if (owner) break;
-  }
-  if (!owner) throw new FocusIngestError(404, "Muqeet was not found");
-
   const byExternalKey = await prisma.pipelineTodayRow.findFirst({
-    where: { organizationId: owner.organizationId, externalKey: input.cardId },
+    where: { externalKey: input.cardId },
     include: { lead: true },
   });
   const row =
     byExternalKey ??
     (await prisma.pipelineTodayRow.findFirst({
-      where: { organizationId: owner.organizationId, id: input.cardId },
+      where: { id: input.cardId },
       include: { lead: true },
     }));
   if (!row) throw new FocusIngestError(404, "Unknown card");
-  if (row.ownerId !== owner.id) throw new FocusIngestError(403, "That card belongs to another rep", { cardId: row.externalKey });
 
   const plan = planComplete({ status: row.status, outcomeMode: row.outcomeMode, outcome: input.outcome });
   if (!plan.ok) throw new FocusIngestError(plan.status, plan.error, { cardId: row.externalKey });
@@ -207,8 +245,8 @@ export async function applyFocusIngestComplete(input: {
   }
 
   const saved = await commitPipelineTodayOutcome({
-    organizationId: owner.organizationId,
-    actorId: owner.id,
+    organizationId: row.organizationId,
+    actorId: row.ownerId,
     row,
     outcome: input.outcome,
     dueAt: input.dueAt,

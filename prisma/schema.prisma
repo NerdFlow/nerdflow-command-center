@@ -282,6 +282,8 @@ model User {
   photoUrl               String?    @map("photo_url") @db.VarChar(2048)
   channelAccounts        Json       @default("{}") @map("channel_accounts")
   channelsWorked         Json       @default("[\"call\",\"email\"]") @map("channels_worked")
+  /// Daily Focus cap per channel, e.g. { "email": 25, "linkedin": 15, "call": 20 }. Missing key uses the org default.
+  channelDailyCaps       Json       @default("{}") @map("channel_daily_caps")
   lastLoginAt            DateTime?  @map("last_login_at")
   sessionsInvalidatedAt  DateTime?  @map("sessions_invalidated_at")
   isDemo                 Boolean    @default(false) @map("is_demo")
@@ -594,7 +596,8 @@ model Lead {
   @@map("leads")
 }
 
-/// One Sales Pipeline Today-tab row. One row is one Focus card, owned by Muqeet.
+/// One Focus card: a lead plus a channel, assigned to the rep who works that channel.
+/// `ownerId` is the assignee. The lead's owner does not change when the card is routed.
 model PipelineTodayRow {
   id             String       @id @default(uuid())
   organizationId String       @map("organization_id")

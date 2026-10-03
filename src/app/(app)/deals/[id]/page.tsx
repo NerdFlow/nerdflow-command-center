@@ -14,7 +14,10 @@ export default async function DealPage({ params }: { params: { id: string } }) {
   if (!deal) notFound();
 
   const [touches, conversations] = await Promise.all([
-    prisma.touch.findMany({ where: { dealId: deal.id }, orderBy: { occurredAt: "desc" } }),
+    prisma.touch.findMany({
+      where: { OR: [{ dealId: deal.id }, { leadId: deal.leadId }] },
+      orderBy: { occurredAt: "desc" },
+    }),
     prisma.conversation.findMany({ where: { dealId: deal.id }, orderBy: { occurredAt: "desc" }, include: { review: true } }),
   ]);
 

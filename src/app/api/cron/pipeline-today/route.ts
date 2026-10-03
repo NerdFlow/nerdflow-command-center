@@ -1,6 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/server/db";
-import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
 import { applyPipelineTodaySync } from "@/server/pipelineTodaySync";
 import { readPipelineTodayGrid, sheetsConfigStatus } from "@/server/googleSheets";
 
@@ -9,8 +8,8 @@ import { readPipelineTodayGrid, sheetsConfigStatus } from "@/server/googleSheets
  * at 15:26 Asia/Karachi (10:26 UTC). GitHub cron is 10:31 UTC, Monday–Friday:
  *   31 10 * * 1-5
  *
- * Nothing is sent. Call rows are dropped. If Sheets credentials are missing
- * the job skips instead of failing, and Muqeet can paste the Today tab in Focus.
+ * Nothing is sent. Cards are routed from each rep's channels. If Sheets
+ * credentials are missing the job skips instead of failing.
  */
 export async function POST(req: NextRequest) {
   const expected = process.env.CRON_SECRET;
@@ -30,16 +29,19 @@ export async function POST(req: NextRequest) {
   const orgs = await prisma.organization.findMany({ select: { id: true } });
   const results: { organizationId: string; open?: number; error?: string }[] = [];
   for (const org of orgs) {
-    const owner = await resolveFocusTodayOwner(org.id);
-    if (!owner) {
-      results.push({ organizationId: org.id, error: "Focus Today owner not found" });
+    const actor = await prisma.user.findFirst({
+      where: { organizationId: org.id, status: { not: "deactivated" }, role: "lead" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    if (!actor) {
+      results.push({ organizationId: org.id, error: "No lead to record the sync" });
       continue;
     }
     try {
       const summary = await applyPipelineTodaySync({
         organizationId: org.id,
-        actorId: owner.id,
-        ownerId: owner.id,
+        actorId: actor.id,
         source: "sheets",
         grid: read.grid,
       });

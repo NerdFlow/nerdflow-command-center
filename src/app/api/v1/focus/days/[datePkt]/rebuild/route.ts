@@ -6,9 +6,9 @@ import { applyFocusIngestRebuild } from "@/server/focusIngest";
 import { FocusIngestError } from "@/server/pipelineTodayOutcome";
 
 /**
- * Replace Muqeet's open Focus cards for one Asia/Karachi day.
- * Bearer FOCUS_INGEST_SECRET. Call cards are rejected. Same-day Done stays
- * unless force=true. Repeating the same body is safe.
+ * Replace one day's open Focus cards and route each card by channel.
+ * Bearer FOCUS_INGEST_SECRET. Owner is an optional hint. Same-day Done stays
+ * unless force=true. Repeating the same body is safe. Nothing is sent.
  *
  *   curl -sS -X PUT "https://sales.nerdflow.cloud/api/v1/focus/days/2026-10-02/rebuild" \
  *     -H "Authorization: Bearer $FOCUS_INGEST_SECRET" \

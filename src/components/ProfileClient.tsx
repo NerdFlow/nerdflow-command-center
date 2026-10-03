@@ -6,6 +6,8 @@ import { Btn, Panel } from "@/components/ui";
 import { saveProfile } from "@/server/actions/profile";
 import type { Channel } from "@prisma/client";
 
+const CAP_CHANNELS = ["email", "linkedin", "call"] as const;
+
 const CHANNEL_OPTIONS: { value: Channel; label: string }[] = [
   { value: "call", label: "Call" },
   { value: "email", label: "Email" },
@@ -23,6 +25,7 @@ export function ProfileClient({
   instagram: initialInstagram,
   linkedin: initialLinkedin,
   channelsWorked: initialChannelsWorked,
+  channelDailyCaps: initialCaps,
   targets,
 }: {
   isSetup: boolean;
@@ -34,6 +37,7 @@ export function ProfileClient({
   instagram: string;
   linkedin: string;
   channelsWorked: string[];
+  channelDailyCaps: Partial<Record<"email" | "linkedin" | "call", number>>;
   targets: { label: string; value: number }[];
 }) {
   const router = useRouter();
@@ -45,6 +49,11 @@ export function ProfileClient({
   const [instagram, setInstagram] = useState(initialInstagram);
   const [linkedin, setLinkedin] = useState(initialLinkedin);
   const [channelsWorked, setChannelsWorked] = useState<Channel[]>(initialChannelsWorked as Channel[]);
+  const [caps, setCaps] = useState<Record<string, string>>({
+    email: initialCaps.email?.toString() ?? "30",
+    linkedin: initialCaps.linkedin?.toString() ?? "30",
+    call: initialCaps.call?.toString() ?? "30",
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +67,21 @@ export function ProfileClient({
     setSaving(true);
     setError(null);
     try {
-      await saveProfile({ fullName, timezone, start, end, gmail, instagram, linkedin, channelsWorked, markComplete: isSetup });
+      const channelDailyCaps = Object.fromEntries(
+        CAP_CHANNELS.filter((channel) => channelsWorked.includes(channel)).map((channel) => [channel, Number(caps[channel]) || 0]),
+      );
+      await saveProfile({
+        fullName,
+        timezone,
+        start,
+        end,
+        gmail,
+        instagram,
+        linkedin,
+        channelsWorked,
+        channelDailyCaps,
+        markComplete: isSetup,
+      });
       if (isSetup) {
         router.push("/today");
         router.refresh();
@@ -112,7 +135,21 @@ export function ProfileClient({
               </button>
             ))}
           </div>
-          <p className="text-xs text-muted mt-1">These are the tiles you&apos;ll see when starting a Focus session.</p>
+          <p className="text-xs text-muted mt-1">Focus only gives you cards for these channels. A daily cap is how many of that channel you can hold today.</p>
+          <div className="grid grid-cols-3 gap-2 mt-3">
+            {CAP_CHANNELS.filter((channel) => channelsWorked.includes(channel)).map((channel) => (
+              <label key={channel} className="text-xs">
+                {channel} cap
+                <input
+                  type="number"
+                  min={0}
+                  className="w-full border border-rule rounded-lg px-2 py-1.5 bg-bg mt-1 text-sm"
+                  value={caps[channel]}
+                  onChange={(e) => setCaps((prev) => ({ ...prev, [channel]: e.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
         </div>
 
         <div>

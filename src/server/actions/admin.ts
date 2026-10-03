@@ -7,7 +7,9 @@ import { writeAuditLog } from "@/server/audit";
 import { getDefaultOrgId } from "@/server/org";
 import { getOrgSettings } from "@/server/settings";
 import { generateTempPassword, hashPassword } from "@/server/password";
-import type { Role, TargetMetric } from "@prisma/client";
+import { parseChannelCaps, parseChannelsWorked } from "@/lib/focusRouting";
+import { rerouteOpenFocusCards } from "@/server/focusRouting";
+import type { Channel, Role, TargetMetric } from "@prisma/client";
 
 /** Settings → people: no invite ceremony, just create the account with a temp password shown once. */
 export async function addPerson(input: { email: string; fullName: string; role: Role }) {
@@ -66,6 +68,40 @@ export async function setUserStatus(userId: string, status: "active" | "deactiva
     entityId: userId,
   });
   revalidatePath("/team");
+}
+
+export async function setUserChannels(
+  userId: string,
+  channelsWorked: Channel[],
+  channelDailyCaps: Partial<Record<"email" | "linkedin" | "call", number>>,
+) {
+  const lead = await requireRole(["lead"]);
+  const before = await prisma.user.findFirst({ where: { id: userId, organizationId: lead.organizationId } });
+  if (!before) throw new Error("That person is not on this team.");
+  const previous = Array.isArray(before.channelsWorked) ? before.channelsWorked : [];
+  const channels = [
+    ...parseChannelsWorked(channelsWorked),
+    ...channelsWorked.filter((channel) => channel === "instagram"),
+    ...(previous.includes("instagram") && !channelsWorked.includes("instagram") ? (["instagram"] as Channel[]) : []),
+  ];
+  const caps = parseChannelCaps(channelDailyCaps);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { channelsWorked: channels, channelDailyCaps: caps },
+  });
+  await writeAuditLog({
+    organizationId: lead.organizationId,
+    actorId: lead.id,
+    action: "user_channels_updated",
+    entityType: "user",
+    entityId: userId,
+    before: { channelsWorked: before.channelsWorked, channelDailyCaps: before.channelDailyCaps },
+    after: { channelsWorked: channels, channelDailyCaps: caps },
+  });
+  await rerouteOpenFocusCards(lead.organizationId, lead.id);
+  revalidatePath("/team");
+  revalidatePath("/focus");
+  revalidatePath("/today");
 }
 
 export async function setTarget(userId: string, metric: TargetMetric, dailyValue: number) {

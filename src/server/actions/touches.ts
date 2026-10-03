@@ -35,6 +35,8 @@ export async function logTouchOutcome(params: {
   scriptRating?: "up" | "down" | "helpful" | "meh" | "bad";
   /** What the caller said, in the rep's words. */
   callerNote?: string;
+  /** Focus pipeline card this outcome closes. The lead owner does not change. */
+  pipelineRowId?: string;
 }) {
   const user = await requireUser();
   const leadOrNull = await prisma.lead.findFirst({
@@ -125,11 +127,16 @@ export async function logTouchOutcome(params: {
 
   const scriptUsed = params.scriptUsed ?? null;
   const scriptId = params.scriptId ?? (scriptUsed ? `${params.channel}_${scriptUsed}` : null);
+  const openDeal = await prisma.deal.findFirst({
+    where: { leadId: lead.id, stage: { notIn: ["won", "lost"] } },
+    select: { id: true },
+  });
   const [touch, , dealId] = await Promise.all([
     prisma.touch.create({
       data: {
         organizationId: user.organizationId,
         leadId: lead.id,
+        dealId: openDeal?.id ?? null,
         userId: user.id,
         channel: params.channel,
         step,
@@ -143,6 +150,18 @@ export async function logTouchOutcome(params: {
     }),
     incrementDailyCount(user.id, user.organizationId, params.channel),
     applyOutcomeEffect(),
+    params.pipelineRowId
+      ? prisma.pipelineTodayRow.updateMany({
+          where: {
+            id: params.pipelineRowId,
+            organizationId: user.organizationId,
+            ownerId: user.id,
+            leadId: lead.id,
+            status: "open",
+          },
+          data: { status: "done" },
+        })
+      : Promise.resolve(),
     writeAuditLog({
       organizationId: user.organizationId,
       actorId: user.id,
@@ -156,6 +175,11 @@ export async function logTouchOutcome(params: {
       },
     }),
   ]);
+
+  const linkedDealId = dealId ?? openDeal?.id ?? null;
+  if (linkedDealId && touch.dealId !== linkedDealId) {
+    await prisma.touch.update({ where: { id: touch.id }, data: { dealId: linkedDealId } });
+  }
 
   if (params.pastedMessage && (params.outcome === "interested" || params.outcome === "replied")) {
     await prisma.conversation.create({

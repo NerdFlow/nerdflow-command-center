@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
 import { applyPipelineTodaySync } from "@/server/pipelineTodaySync";
 import { readPipelineTodayGrid } from "@/server/googleSheets";
 import { commitPipelineTodayOutcome } from "@/server/pipelineTodayOutcome";
@@ -37,30 +36,16 @@ function revalidateWork() {
   revalidatePath("/today");
 }
 
-function summaryMessage(input: {
-  open: number;
-  stored: number;
-  filteredCalls: number;
-  sheetDone: number;
-  ownerName: string;
-}): string {
-  const calls = input.filteredCalls > 0 ? ` Dropped ${input.filteredCalls} call ${input.filteredCalls === 1 ? "row" : "rows"}.` : "";
+function summaryMessage(input: { open: number; stored: number; sheetDone: number }): string {
   const done = input.sheetDone > 0 ? ` ${input.sheetDone} already marked done on the sheet.` : "";
-  return `${input.open} open ${input.open === 1 ? "card" : "cards"} on ${input.ownerName}'s Focus (${input.stored} rows stored).${done}${calls}`;
+  return `${input.open} open ${input.open === 1 ? "card" : "cards"} routed across the team (${input.stored} rows stored).${done}`;
 }
 
 export async function syncPipelineToday(raw: z.input<typeof syncSchema>): Promise<PipelineSyncResult> {
   const params = syncSchema.parse(raw);
   const user = await requireUser();
-  const owner = await resolveFocusTodayOwner(user.organizationId);
-  if (!owner) {
-    return {
-      ok: false,
-      message: "Couldn't find Muqeet. Set FOCUS_TODAY_OWNER_EMAIL to his login (muqeet@nerdflow.tech).",
-    };
-  }
-  if (user.role !== "lead" && user.id !== owner.id) {
-    return { ok: false, message: "Only Muqeet or a lead can sync Today." };
+  if (user.role !== "lead") {
+    return { ok: false, message: "Only a lead can sync Today." };
   }
 
   let grid: string[][];
@@ -78,14 +63,13 @@ export async function syncPipelineToday(raw: z.input<typeof syncSchema>): Promis
   const summary = await applyPipelineTodaySync({
     organizationId: user.organizationId,
     actorId: user.id,
-    ownerId: owner.id,
     source: params.source,
     grid,
   });
   revalidateWork();
   return {
     ok: true,
-    message: summaryMessage({ ...summary, ownerName: owner.fullName.trim().split(/\s+/)[0] || "Muqeet" }),
+    message: summaryMessage(summary),
     open: summary.open,
     stored: summary.stored,
     filteredCalls: summary.filteredCalls,
@@ -102,7 +86,7 @@ export async function recordPipelineOutcome(raw: z.input<typeof outcomeSchema>) 
     include: { lead: true },
   });
   if (!row) throw new Error("That Today card is gone. Sync again.");
-  if (row.ownerId !== user.id) throw new Error("That card is on Muqeet's queue.");
+  if (row.ownerId !== user.id) throw new Error("That card is on someone else's queue.");
 
   const saved = await commitPipelineTodayOutcome({
     organizationId: user.organizationId,

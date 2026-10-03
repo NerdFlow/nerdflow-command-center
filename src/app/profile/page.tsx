@@ -14,6 +14,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: { se
   const targets = await getActiveTargets(user.id);
   const channelAccounts = (user.channelAccounts as Record<string, string>) ?? {};
   const channelsWorked = (user.channelsWorked as string[]) ?? ["call", "email"];
+  const channelDailyCaps = (user.channelDailyCaps as Partial<Record<"email" | "linkedin" | "call", number>>) ?? {};
   const workingHours = user.workingHours as { start: string; end: string; days: number[] };
 
   return (
@@ -50,6 +51,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: { se
           instagram={channelAccounts.instagram ?? ""}
           linkedin={channelAccounts.linkedin ?? ""}
           channelsWorked={channelsWorked}
+          channelDailyCaps={channelDailyCaps}
           targets={targets.map((t) => ({ label: METRIC_LABEL[t.metric], value: t.dailyValue }))}
         />
       </div>
