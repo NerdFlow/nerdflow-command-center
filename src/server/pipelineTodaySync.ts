@@ -16,6 +16,7 @@ import {
   queueDateAsUtc,
   type MappedPipelineRow,
 } from "@/lib/pipelineToday";
+import { outreachBlockReason } from "@/lib/replyLog";
 
 const PIPELINE_CAMPAIGN_NAME = "Sales Pipeline Today";
 
@@ -227,7 +228,7 @@ export async function applyPipelineTodaySync(input: {
     const lead = await upsertPipelineLead(prisma, input.organizationId, card.leadOwnerId, campaign.id, card.row, {
       source: input.source,
     });
-    const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
+    const blocked = outreachBlockReason(lead) !== null;
     const previous = existingRows.find((row) => row.externalKey === card.cardId);
     const status = rowStatus(card.row.sheetDone, previous?.status, blocked);
     const assigneeId = previous && TERMINAL.has(previous.status) ? previous.ownerId : card.assigneeId;

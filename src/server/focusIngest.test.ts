@@ -29,7 +29,7 @@ import { applyFocusIngestRebuild } from "@/server/focusIngest";
 
 type Tx = {
   campaign: { findFirst: ReturnType<typeof vi.fn> };
-  lead: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+  lead: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
   pipelineTodayRow: { upsert: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> };
 };
 
@@ -39,6 +39,7 @@ function txMock(): Tx {
     lead: {
       findFirst: vi.fn(async () => null),
       create: vi.fn(async () => ({ id: "lead-1", status: "in_cadence" })),
+      update: vi.fn(async () => ({ id: "lead-1", status: "in_cadence", signals: {} })),
     },
     pipelineTodayRow: {
       upsert: vi.fn(async () => ({})),
@@ -182,5 +183,33 @@ describe("applyFocusIngestRebuild transaction", () => {
     ).rejects.toBe(expired);
     expect(attempts).toBe(1);
     expect(state.auditCreate).not.toHaveBeenCalled();
+  });
+
+  it("does not open a card for a lead that already logged a reply", async () => {
+    state.transaction.mockImplementation(async (fn: (client: Tx) => Promise<unknown>) => fn(tx));
+    tx.lead.findFirst.mockResolvedValue({
+      id: "lead-1",
+      status: "replied",
+      signals: { stopOutreach: true },
+      fitScore: 0,
+      approvedById: "user-1",
+      businessName: "Company 0",
+    });
+    tx.lead.update.mockResolvedValue({ id: "lead-1", status: "replied", signals: { stopOutreach: true } });
+
+    const result = await applyFocusIngestRebuild({
+      datePkt: "2026-10-02",
+      source: "today-rebuild",
+      force: false,
+      accepted: acceptedCards(1),
+      rejected: [],
+    });
+
+    expect(result.accepted).toBe(0);
+    expect(result.cardIds).toEqual([]);
+    expect(result.rejected).toEqual([{ cardId: "2026-10-02-card-0", reason: "replied" }]);
+    const upsert = tx.pipelineTodayRow.upsert.mock.calls[0]?.[0] as { create: { status: string }; update: { status: string } };
+    expect(upsert.create.status).toBe("dropped");
+    expect(upsert.update.status).toBe("dropped");
   });
 });

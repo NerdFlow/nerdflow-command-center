@@ -62,6 +62,7 @@ export function ShapeASession({
   onSkip,
   onFollowUp,
   onCallOutcome,
+  onLogReply,
 }: {
   rows: Row[];
   me: string;
@@ -85,6 +86,7 @@ export function ShapeASession({
   onSkip: (row: Row) => void;
   onFollowUp: (row: Row) => void;
   onCallOutcome: (row: Row, outcome: TouchOutcome, note: string | null, script: { variant: "a" | "b"; scriptId: string }) => void;
+  onLogReply: (row: Row) => void;
 }) {
   const current = rows[0];
   const [copied, setCopied] = useState(false);
@@ -503,6 +505,9 @@ export function ShapeASession({
                 Skip
               </button>
             )}
+            <button type="button" onClick={() => onLogReply(current)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
+              Log reply
+            </button>
           </div>
         </div>
       </div>

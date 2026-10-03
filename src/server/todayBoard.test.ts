@@ -358,4 +358,19 @@ describe("loadFocusBoard", () => {
 
     expect(board.cards.map((card) => card.pipeline?.rowId).filter(Boolean)).toEqual(["pipe-email"]);
   });
+
+  it("removes a pipeline card after a logged reply and does not open another", async () => {
+    const blocked = pipelineRow({ id: "pipe-replied", sheetRow: 1, status: "open", leadId: "lead-stopped" });
+    Object.assign(blocked.lead, { status: "replied", signals: { stopOutreach: true } });
+    state.rows = [blocked];
+    const stoppedReply = replyItem("reply-stopped", "lead-stopped", "Stopped");
+    Object.assign(stoppedReply.lead, { status: "replied", signals: { stopOutreach: true } });
+    state.replies = [replyItem("reply-1", "lead-reply", "Grace"), stoppedReply];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID);
+
+    expect(board.cards.map((card) => card.lead.id)).toEqual(["lead-queue", "lead-reply"]);
+    expect(board.cards.some((card) => card.lead.id === "lead-stopped")).toBe(false);
+    expect(board.cards.some((card) => card.pipeline?.rowId === "pipe-replied")).toBe(false);
+  });
 });

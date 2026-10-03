@@ -7,6 +7,7 @@ import { completeTodayRow, followUpTodayRow, skipTodayRow } from "@/server/actio
 import { recordPipelineOutcome } from "@/server/actions/pipelineToday";
 import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
+import { LogReplyDialog } from "@/components/LogReplyDialog";
 import { ShapeASession } from "@/components/ShapeASession";
 import { TodaySyncPanel } from "@/components/TodaySyncPanel";
 import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
@@ -159,6 +160,7 @@ export function FocusClient({
   const inFlight = useRef(new Set<string>());
   const pendingSaves = useRef<PendingOutcome[]>([]);
   const [pendingRating, setPendingRating] = useState<{ touchId: string; businessName: string } | null>(null);
+  const [replyTarget, setReplyTarget] = useState<{ id: string; name: string; channel: Channel } | null>(null);
 
   const [started, setStarted] = useState(false);
   const [sessionLengthSeconds, setSessionLengthSeconds] = useState<number | null>(3600);
@@ -545,6 +547,20 @@ export function FocusClient({
     router.push("/today");
   }
 
+  const replyDialog = replyTarget ? (
+    <LogReplyDialog
+      leadId={replyTarget.id}
+      leadName={replyTarget.name}
+      channel={replyTarget.channel}
+      onClose={() => setReplyTarget(null)}
+      onConfirmed={(leadId) => {
+        setReplyTarget(null);
+        setCards((prev) => prev.filter((card) => card.lead.id !== leadId));
+        router.refresh();
+      }}
+    />
+  ) : null;
+
   if (!started) {
     return (
       <div className="flex-1 flex items-center justify-center p-6 md:p-10">
@@ -720,7 +736,11 @@ export function FocusClient({
           onSkip={handleShapeSkip}
           onFollowUp={handleShapeFollowUp}
           onCallOutcome={handleShapeCall}
+          onLogReply={(row) =>
+            setReplyTarget({ id: row.card.lead.id, name: row.card.lead.businessName, channel: row.action.channel })
+          }
         />
+        {replyDialog}
         {coachOpen && (
           <FlowCoach
             assistantName={assistantName}
@@ -827,6 +847,7 @@ export function FocusClient({
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {topBar}
       {ratingBar}
+      {replyDialog}
 
       <div className={stack.card === "scroll" ? "flex-1 min-h-0 overflow-y-auto px-4 md:px-6 py-6" : "px-4 md:px-6 py-6"}>
         <div className="max-w-xl mx-auto space-y-5">
@@ -990,6 +1011,13 @@ export function FocusClient({
           ))}
           <button type="button" onClick={skip} className="text-xs text-dim hover:text-ink px-3 py-2">
             Skip · S
+          </button>
+          <button
+            type="button"
+            onClick={() => setReplyTarget({ id: current.lead.id, name: current.lead.businessName, channel })}
+            className="border border-rule bg-panel font-semibold px-3 py-2 rounded-xl text-sm"
+          >
+            Log reply
           </button>
           </div>
         </div>
