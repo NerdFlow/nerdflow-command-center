@@ -15,8 +15,10 @@ import {
   type RejectedCard,
   type StoredFocusCard,
 } from "@/lib/focusIngest";
+import { applyFocusCardSkip } from "@/server/skipFocus";
+import type { SkipReason } from "@/lib/skipReason";
 
-const TERMINAL = new Set(["done", "skipped", "follow_up"]);
+const TERMINAL = new Set(["done", "skipped", "follow_up", "snoozed"]);
 
 export type RebuildApplyInput = {
   datePkt: string;
@@ -35,12 +37,13 @@ export type RebuildApplyResult = {
   routes: { cardId: string; assigneeId: string; leadOwnerId: string; slot: string }[];
 };
 
-function storedFromRow(row: { externalKey: string; queueDate: Date; status: string; ownerId: string }): StoredFocusCard {
+function storedFromRow(row: { externalKey: string; queueDate: Date; status: string; ownerId: string; held?: boolean }): StoredFocusCard {
   return {
     externalKey: row.externalKey,
     queueDate: dateStampFromDb(row.queueDate),
     status: row.status,
     ownerId: row.ownerId,
+    held: row.held === true,
   };
 }
 
@@ -224,10 +227,24 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
 export async function applyFocusIngestComplete(input: {
   cardId: string;
   outcome: FocusOutcome;
+  reason: SkipReason | null;
   dueAt: Date | null;
+  returnStamp: string | null;
   note: string | null;
   occurredAt: Date | null;
-}): Promise<{ cardId: string; outcome: FocusOutcome; status: string; idempotent: boolean; touchId: string | null }> {
+}): Promise<{
+  cardId: string;
+  outcome: FocusOutcome;
+  status: string;
+  idempotent: boolean;
+  touchId: string | null;
+  reason?: SkipReason | null;
+  note?: string | null;
+  leadId?: string;
+  leadStatus?: string | null;
+  returnsOn?: string | null;
+  routedCardId?: string | null;
+}> {
   const byExternalKey = await prisma.pipelineTodayRow.findFirst({
     where: { externalKey: input.cardId },
     include: { lead: true },
@@ -239,6 +256,20 @@ export async function applyFocusIngestComplete(input: {
       include: { lead: true },
     }));
   if (!row) throw new FocusIngestError(404, "Unknown card");
+
+  if (input.outcome === "skip") {
+    if (!input.reason) throw new FocusIngestError(422, "skip needs a reason", { cardId: row.externalKey });
+    return applyFocusCardSkip({
+      organizationId: row.organizationId,
+      actorId: row.ownerId,
+      reason: input.reason,
+      note: input.note,
+      returnsOn: input.returnStamp,
+      row,
+      lead: row.lead,
+      actionKey: row.externalKey,
+    });
+  }
 
   const plan = planComplete({ status: row.status, outcomeMode: row.outcomeMode, outcome: input.outcome });
   if (!plan.ok) throw new FocusIngestError(plan.status, plan.error, { cardId: row.externalKey });

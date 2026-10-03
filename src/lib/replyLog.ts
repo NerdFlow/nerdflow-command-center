@@ -53,7 +53,11 @@ export function withStopOutreach(signals: unknown): Record<string, unknown> {
  * Null means a Today sync or rebuild may still open one.
  */
 export function outreachBlockReason(lead: { status?: string | null; signals?: unknown }): string | null {
-  if (outreachStopped(lead.signals)) return SIGNAL_REASON[lead.status ?? ""] ?? "replied";
+  if (outreachStopped(lead.signals)) {
+    const reason = asSignalRecord(lead.signals).stopOutreachReason;
+    if (typeof reason === "string" && reason.trim()) return reason.trim();
+    return SIGNAL_REASON[lead.status ?? ""] ?? "replied";
+  }
   if (!lead.status) return null;
   return STATUS_BLOCKS[lead.status] ?? null;
 }

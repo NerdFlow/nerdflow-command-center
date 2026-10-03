@@ -137,6 +137,10 @@ export async function loadFocusBoard(
   const channels = (options?.channels ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
   const queueDate = pktDateStamp();
   const queueDay = queueDateAsUtc(queueDate);
+  await prisma.pipelineTodayRow.updateMany({
+    where: { organizationId, ownerId, status: "snoozed", returnsOn: { lte: queueDay } },
+    data: { status: "open", returnsOn: null },
+  });
   const sync = await loadSyncState(ownerId, organizationId, options?.ownerName ?? "You", queueDate);
 
   // Open rows assigned to this rep, including ones queued on an earlier Asia/Karachi day.

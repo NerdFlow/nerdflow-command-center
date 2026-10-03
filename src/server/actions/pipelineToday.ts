@@ -87,6 +87,7 @@ export async function recordPipelineOutcome(raw: z.input<typeof outcomeSchema>) 
   });
   if (!row) throw new Error("That Today card is gone. Sync again.");
   if (row.ownerId !== user.id) throw new Error("That card is on someone else's queue.");
+  if (params.outcome === "skip") throw new Error("Skip needs a reason.");
 
   const saved = await commitPipelineTodayOutcome({
     organizationId: user.organizationId,

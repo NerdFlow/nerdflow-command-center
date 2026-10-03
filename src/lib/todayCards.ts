@@ -1,6 +1,6 @@
 import { resolveLeadChannel } from "@/server/cadence";
 import { whyThisLead } from "@/lib/focusCallCard";
-import type { PipelineCardView, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
+import { pktDateStamp, type PipelineCardView, type PipelineLinkKind, type PipelineOutcomeMode } from "@/lib/pipelineToday";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { Channel } from "@prisma/client";
 import { leadHasPhone } from "@/lib/focusQueue";
@@ -78,6 +78,17 @@ export function skipKeysFromSignals(signals: Record<string, unknown> | null | un
   return stringListFromSignals(signals, "shapeASkipKeys");
 }
 
+/** Cadence cards skipped as Not now. Value is the YYYY-MM-DD they return. */
+export function skipUntilFromSignals(signals: Record<string, unknown> | null | undefined): Record<string, string> {
+  const raw = signals?.shapeASkipUntil;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) out[key] = value;
+  }
+  return out;
+}
+
 export function followUpKeysFromSignals(signals: Record<string, unknown> | null | undefined): string[] {
   return stringListFromSignals(signals, "shapeAFollowUpKeys");
 }
@@ -144,12 +155,13 @@ export function expandShapeLead(lead: TodayShapeLead, allowedChannels: Channel[]
         (channelAllowed(allowedChannels, "linkedin") || channelAllowed(allowedChannels, "email"));
   if (linkedinReason && canLinkedin) push("linkedin_request", "linkedin");
 
-  if (cadence === "email" && lead.email?.trim() && channelAllowed(allowedChannels, "email")) {
+  const emailDead = lead.signals?.emailInvalid === true;
+  if (cadence === "email" && lead.email?.trim() && !emailDead && channelAllowed(allowedChannels, "email")) {
     push("send_email", "email");
   }
 
   const form = contactFormUrl(lead.signals);
-  if (form && channelAllowed(allowedChannels, "email")) push("contact_form", "email");
+  if (form && !emailDead && channelAllowed(allowedChannels, "email")) push("contact_form", "email");
 
   if (cadence === "instagram" && channelAllowed(allowedChannels, "instagram")) {
     push("instagram", "instagram");
@@ -243,8 +255,13 @@ export function projectTodayActions(input: {
     ? [actionFromPipeline(input.lead.id, input.pipeline)]
     : expandShapeLead(input.lead, input.allowedChannels);
   const settled = new Set(followUpKeysFromSignals(input.lead.signals));
+  const skipped = new Set(skipKeysFromSignals(input.lead.signals));
+  const until = skipUntilFromSignals(input.lead.signals);
+  const today = pktDateStamp();
   return actions.filter((action) => {
-    if (settled.has(action.key)) return false;
+    if (settled.has(action.key) || skipped.has(action.key)) return false;
+    const back = until[action.key];
+    if (back && back > today) return false;
     if (input.hideCall && action.kind === "call") return false;
     return true;
   });

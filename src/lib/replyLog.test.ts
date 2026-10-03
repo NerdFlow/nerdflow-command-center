@@ -28,6 +28,9 @@ describe("logged reply outcomes", () => {
     expect(outreachBlockReason({ status: "not_fit" })).toBe("not_a_fit");
     expect(outreachBlockReason({ status: "finished", signals: { stopOutreach: true } })).toBe("finished");
     expect(outreachBlockReason({ status: "in_cadence", signals: { stopOutreach: true } })).toBe("replied");
+    expect(outreachBlockReason({ status: "in_cadence", signals: { stopOutreach: true, stopOutreachReason: "already_in_touch" } })).toBe(
+      "already_in_touch",
+    );
     expect(outreachStopped(withStopOutreach({ pipelineToday: true }))).toBe(true);
   });
 });

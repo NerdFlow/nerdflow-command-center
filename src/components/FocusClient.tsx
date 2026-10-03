@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
-import { completeTodayRow, followUpTodayRow, skipTodayRow } from "@/server/actions/todayRows";
+import { completeTodayRow, followUpTodayRow } from "@/server/actions/todayRows";
+import { skipFocusCard } from "@/server/actions/skipFocus";
 import { recordPipelineOutcome } from "@/server/actions/pipelineToday";
+import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
 import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
 import { LogReplyDialog } from "@/components/LogReplyDialog";
@@ -169,6 +171,11 @@ export function FocusClient({
   const [conversations, setConversations] = useState(0);
   const [sessionTotal, setSessionTotal] = useState(0);
   const [businessHoursOnly, setBusinessHoursOnly] = useState(false);
+  const [callSkipOpen, setCallSkipOpen] = useState(false);
+
+  useEffect(() => {
+    setCards(initialCards.filter((card) => card.replyOnly || cardInRepQueue(card, allowedChannels)));
+  }, [initialCards, allowedChannels]);
 
   const countByChannel = useMemo(() => {
     const count = (channel: Channel) => selectFocusCards(cards, channel, sourceFilter, businessHoursOnly, repTimezone).length;
@@ -296,7 +303,7 @@ export function FocusClient({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!started || channelFilter !== "call" || !current) return;
+      if (!started || channelFilter !== "call" || !current || callSkipOpen) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
       const match = outcomes.find((o) => o.key === e.key);
       if (match) handleOutcome(match.outcome);
@@ -307,7 +314,7 @@ export function FocusClient({
     return () => window.removeEventListener("keydown", onKey);
     // handleOutcome closes over the current card and the note; rebind when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started, channelFilter, current, outcomes, draftText, callNote, opener, channel]);
+  }, [started, channelFilter, current, outcomes, draftText, callNote, opener, channel, callSkipOpen]);
 
   function startSession(ch: Channel | "all") {
     if (ch !== "all") setChannelFilter(ch);
@@ -324,14 +331,7 @@ export function FocusClient({
 
   function skip() {
     if (!current) return;
-    setCards((prev) => {
-      const idx = prev.findIndex((c) => c.lead.id === current.lead.id);
-      if (idx === -1) return prev;
-      const copyCards = [...prev];
-      const [item] = copyCards.splice(idx, 1);
-      if (item) copyCards.push(item);
-      return copyCards;
-    });
+    setCallSkipOpen(true);
   }
 
   function shapeRowsFor(filter: Channel | "all") {
@@ -363,18 +363,30 @@ export function FocusClient({
       });
   }
 
-  function handleShapeSkip(row: { action: TodayAction; card: Card }) {
-    if (row.action.pipelineRowId) {
-      settlePipeline(row, "skip");
-      return;
-    }
+  function handleShapeSkip(row: { action: TodayAction; card: Card }, detail: SkipDetail) {
     const key = row.action.key;
-    setDeferredKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    if (shapeInFlight.current.has(key)) return;
+    shapeInFlight.current.add(key);
+    setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
-    void skipTodayRow({ leadId: row.card.lead.id, actionKey: key, kind: row.action.kind }).catch((err: unknown) => {
-      setDeferredKeys((prev) => prev.filter((item) => item !== key));
-      setError(err instanceof Error ? err.message : "Couldn't skip that row.");
-    });
+    void skipFocusCard({
+      leadId: row.card.lead.id,
+      pipelineRowId: row.action.pipelineRowId ?? null,
+      actionKey: key,
+      reason: detail.reason,
+      note: detail.note ?? undefined,
+      returnsOn: detail.returnsOn ?? undefined,
+    })
+      .then(() => {
+        router.refresh();
+      })
+      .catch((err: unknown) => {
+        setHiddenKeys((prev) => prev.filter((item) => item !== key));
+        setError(err instanceof Error ? err.message : "Couldn't skip that card.");
+      })
+      .finally(() => {
+        shapeInFlight.current.delete(key);
+      });
   }
 
   function handleShapeFollowUp(row: { action: TodayAction; card: Card }) {
@@ -1022,6 +1034,28 @@ export function FocusClient({
           </div>
         </div>
       </div>
+      {callSkipOpen && (
+        <SkipReasonSheet
+          onCancel={() => setCallSkipOpen(false)}
+          onConfirm={(detail) => {
+            setCallSkipOpen(false);
+            const rowId = current.pipeline?.rowId ?? null;
+            const key = rowId ? `pipeline:${rowId}` : todayActionKey(current.lead.id, "call");
+            void skipFocusCard({
+              leadId: current.lead.id,
+              pipelineRowId: rowId,
+              actionKey: key,
+              reason: detail.reason,
+              note: detail.note ?? undefined,
+              returnsOn: detail.returnsOn ?? undefined,
+            })
+              .then(() => router.refresh())
+              .catch((err: unknown) => {
+                setError(err instanceof Error ? err.message : "Couldn't skip that card.");
+              });
+          }}
+        />
+      )}
     </div>
   );
 }

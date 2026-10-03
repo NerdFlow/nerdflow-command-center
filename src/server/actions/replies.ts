@@ -320,20 +320,6 @@ export async function searchMyLeads(query: string) {
   return leads;
 }
 
-export async function logManualReply(leadId: string, channel: "call" | "email" | "instagram" | "linkedin", text: string) {
-  const user = await requireUser();
-  const lead = await prisma.lead.findFirst({ where: { id: leadId, organizationId: user.organizationId } });
-  if (!lead) throw new Error("Lead not found");
-  await assertCanWorkLead(user, lead);
-
-  const reply = await prisma.reply.create({
-    data: { organizationId: user.organizationId, leadId, channel, text, status: "open" },
-  });
-  await prisma.lead.update({ where: { id: leadId }, data: { status: "replied" } });
-  revalidatePath("/replies");
-  return reply.id;
-}
-
 const beginReplySchema = z.object({
   leadId: z.string().min(1),
   channel: z.enum(["call", "email", "instagram", "linkedin"]),

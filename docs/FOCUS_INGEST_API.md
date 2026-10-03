@@ -68,7 +68,7 @@ Rules:
 - Replaces that day's **open** cards for every assignee. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears that day's open cards. A payload where every card is rejected returns **422** and does not change the queue.
 - Open cards from an earlier day stay on Focus until Done or Skip. This route does not drop them, and a later day does not reopen a card that is already done or skipped.
 - The whole day is one database transaction. Send the full list (a 15-card day, or 30+) in one request. Do not split it into batches under 10 cards.
-- Cards already **done**, **skipped**, or **needs follow-up** on that day are left in place. Pass `"force": true` or `?force=true` to drop them and to let a `done: false` card reopen.
+- Cards already **done**, **skipped**, **snoozed** (Not now), or **needs follow-up** on that day are left in place. A card opened by a bad-contact skip is held and is not cleared by the next rebuild of that day. Pass `"force": true` or `?force=true` to drop them and to let a `done: false` card reopen.
 - `rules.autoSend: true` is rejected. The app never sends email, LinkedIn, a form, or a call.
 - `fromIdentity` is not used for routing and nothing is sent from it.
 - A `cardId` that already belongs to another day is **409**. A duplicate `cardId` in one body is **422**.
@@ -94,14 +94,19 @@ curl -sS -X POST "https://sales.nerdflow.cloud/api/v1/focus/cards/2026-10-02-fu-
 curl -sS -X POST "https://sales.nerdflow.cloud/api/v1/focus/cards/2026-10-02-hphs-lee-email/complete" \
   -H "Authorization: Bearer $FOCUS_INGEST_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"outcome":"skip"}'
+  -d '{"outcome":"skip","reason":"bad_contact","note":"Bounced"}'
+
+curl -sS -X POST "https://sales.nerdflow.cloud/api/v1/focus/cards/2026-10-02-hphs-lee-email/complete" \
+  -H "Authorization: Bearer $FOCUS_INGEST_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"outcome":"skip","reason":"not_now","dueDate":"2026-10-10"}'
 ```
 
-`outcome` is `done`, `skip`, or `needs_follow_up`. LinkedIn request and send-email cards allow Done and Skip. Reply and follow-up also allow Needs follow-up. Next-action cards allow Done and Needs follow-up. An outcome the card does not allow is **422**.
+`outcome` is `done`, `skip`, or `needs_follow_up`. Skip is allowed on every card and requires `reason`: `bad_contact`, `wrong_person`, `not_fit`, `already_in_touch`, `not_now`, or `other`. The response includes that reason, the note, the lead id, and when a bad contact is rerouted to LinkedIn or a call, `routedCardId`. A bad contact with no profile URL and no call path sets the lead status to `needs_contact` and opens no card (`routedCardId` is null). Nothing is sent.
 
-Unknown card is **404**. The same outcome again returns **200** with `"idempotent": true` and does not write a second touch. A different outcome on a finished card is **409**.
+Unknown card is **404**. The same skip reason again returns **200** with `"idempotent": true` and does not write a second skip. A different outcome on a finished card is **409**.
 
-`dueDate` (`YYYY-MM-DD`) is only valid with `needs_follow_up`. It sets the open deal's next step when that lead already has one. `completedAtPkt` with no zone is Asia/Karachi. `note` is stored on the audit row, not sent anywhere.
+`dueDate` (`YYYY-MM-DD`) with `needs_follow_up` sets the open deal's next step when that lead already has one. With `skip` and `reason` `not_now`, `dueDate` is the day the card comes back. Omit it and the card comes back in 7 days. `completedAtPkt` with no zone is Asia/Karachi. `note` is stored with the skip and on the audit row. It is not sent anywhere.
 
 ## Errors
 
@@ -248,6 +253,7 @@ components:
       required: [outcome]
       properties:
         outcome: { type: string, enum: [done, skip, needs_follow_up] }
+        reason: { type: string, enum: [bad_contact, wrong_person, not_fit, already_in_touch, not_now, other], description: Required when outcome is skip. }
         dueDate: { type: string }
         note: { type: string }
         completedAtPkt: { type: string }
