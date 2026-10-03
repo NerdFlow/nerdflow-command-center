@@ -7,6 +7,7 @@ import type { CampaignStrategy } from "@/server/strategy";
 import type { CoachDirectoryLead, ShapeCard, ShapeReply } from "@/lib/shapeCard";
 import type { PipelineActionKind, PipelineCardView, PipelineChannel, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import { presentLeadName } from "@/lib/leadNames";
+import { outreachBlockReason, outreachStopped } from "@/lib/replyLog";
 import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import type { Channel, LeadSource, Prisma } from "@prisma/client";
 
@@ -140,11 +141,13 @@ export async function loadFocusBoard(
 
   // Open rows assigned to this rep, including ones queued on an earlier Asia/Karachi day.
   // A channel they no longer work stays off the board even if a stale row still names them.
-  const pipelineRows = await prisma.pipelineTodayRow.findMany({
-    where: { ...visibleOpenPipelineWhere(organizationId, ownerId, queueDay), channel: { in: channels } },
-    orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
-    include: { lead: { include: { campaign: { include: { product: true } } } } },
-  });
+  const pipelineRows = (
+    await prisma.pipelineTodayRow.findMany({
+      where: { ...visibleOpenPipelineWhere(organizationId, ownerId, queueDay), channel: { in: channels } },
+      orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
+      include: { lead: { include: { campaign: { include: { product: true } } } } },
+    })
+  ).filter((row) => outreachBlockReason(row.lead) === null);
   const pipelineLeadIds = [...new Set(pipelineRows.map((row) => row.leadId))];
   const pipelineTouches =
     pipelineLeadIds.length === 0
@@ -159,7 +162,7 @@ export async function loadFocusBoard(
     if (!lastTouchByLead.has(touch.leadId)) lastTouchByLead.set(touch.leadId, touch);
   }
 
-  const queue = await getQueueForUser(ownerId, 50);
+  const queue = (await getQueueForUser(ownerId, 50)).filter((item) => outreachBlockReason(item.lead) === null);
   const queueIds = queue.map((item) => item.lead.id);
 
   const [sentRows, replies, directory] = await Promise.all([
@@ -245,6 +248,7 @@ export async function loadFocusBoard(
   const queued = new Set(queueIds);
   for (const reply of replies) {
     if (queued.has(reply.leadId)) continue;
+    if (outreachStopped(reply.lead.signals)) continue;
     queued.add(reply.leadId);
     const lead = reply.lead;
     cards.push({

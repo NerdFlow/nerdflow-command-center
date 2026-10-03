@@ -6,7 +6,8 @@ import { Bar, Btn, Chip, Panel, Tabs } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import { STAGE_CHECKLIST, STAGE_LABEL, STAGE_ORDER, type DealFlag } from "@/server/deals";
 import { setChecklistItem, setNextStep, setStage, setDealValue, addDealPerson, togglePersonFlag } from "@/server/actions/deals";
-import type { DealStage, LostReason } from "@prisma/client";
+import { LogReplyDialog } from "@/components/LogReplyDialog";
+import type { Channel, DealStage, LostReason } from "@prisma/client";
 
 const LOST_REASONS: LostReason[] = ["price", "timing", "no_decision", "competitor", "not_fit", "went_silent", "other"];
 
@@ -40,16 +41,21 @@ export function DealDetail({
   flags,
   canEdit,
   timeline,
+  leadId,
+  replyChannel,
 }: {
   deal: DealData;
   health: number;
   flags: DealFlag[];
   canEdit: boolean;
   timeline: TimelineItem[];
+  leadId: string;
+  replyChannel: Channel;
 }) {
   const router = useRouter();
   const toast = useToast();
   const [tab, setTab] = useState("timeline");
+  const [logReply, setLogReply] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [checklistError, setChecklistError] = useState<string | null>(null);
 
@@ -63,10 +69,29 @@ export function DealDetail({
 
   return (
     <div>
-      <h1 className="text-[28px] tracking-tight mb-0.5">{deal.businessName}</h1>
-      <p className="text-muted mb-6">
-        {deal.productName} · {deal.ownerName}
-      </p>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+        <div>
+          <h1 className="text-[28px] tracking-tight mb-0.5">{deal.businessName}</h1>
+          <p className="text-muted m-0">
+            {deal.productName} · {deal.ownerName}
+          </p>
+        </div>
+        <Btn variant="default" onClick={() => setLogReply(true)}>
+          Log reply
+        </Btn>
+      </div>
+      {logReply && (
+        <LogReplyDialog
+          leadId={leadId}
+          leadName={deal.businessName}
+          channel={replyChannel}
+          onClose={() => setLogReply(false)}
+          onConfirmed={() => {
+            setLogReply(false);
+            refresh();
+          }}
+        />
+      )}
 
       <div className="grid gap-4 md:[grid-template-columns:320px_1fr] items-start">
         <aside className="space-y-3">

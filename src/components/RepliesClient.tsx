@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
 import { useToast } from "@/components/Toast";
+import { LogReplyDialog } from "@/components/LogReplyDialog";
 import {
   getReplyDetail,
   classifyReply,
@@ -13,8 +14,6 @@ import {
   snoozeReply,
   closeLeadFromReply,
   applyUnsubscribe,
-  searchMyLeads,
-  logManualReply,
   getRepliesOverview,
 } from "@/server/actions/replies";
 import type { Channel, ReplyLabel, LostReason } from "@prisma/client";
@@ -60,6 +59,7 @@ function channelLink(channel: "gmail" | "instagram" | "linkedin", value: string)
 export function RepliesClient({ overview }: { overview: Overview }) {
   const router = useRouter();
   const [openReplies, setOpenReplies] = useState(overview.openReplies);
+  const loggedReplies = overview.loggedReplies;
   const [waiting, setWaiting] = useState(overview.waitingForReply);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ReplyDetail | null>(null);
@@ -250,7 +250,39 @@ export function RepliesClient({ overview }: { overview: Overview }) {
         </div>
       )}
 
-      {logOpen && <LogReplyModal prefillLead={prefillLead} onClose={() => setLogOpen(false)} onLogged={() => router.refresh()} />}
+      {loggedReplies.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-base font-semibold mb-3">Logged</h2>
+          <div className="space-y-2">
+            {loggedReplies.map((r) => (
+              <div key={r.id} className="px-4 py-3 rounded-card border border-rule bg-panel">
+                <div className="flex justify-between items-baseline gap-2">
+                  <span className="font-semibold text-sm">{r.businessName}</span>
+                  <span className="text-xs text-dim">{timeAgo(r.receivedAt)}</span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-1 mb-1">
+                  <span className="text-xs text-dim">{CHANNEL_LABEL[r.channel]}</span>
+                  {r.label && <Chip tone={LABEL_TONE[r.label]}>{LABEL_TEXT[r.label]}</Chip>}
+                </div>
+                <p className="text-xs text-muted m-0 truncate">{r.text}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {logOpen && (
+        <LogReplyDialog
+          leadId={prefillLead?.id}
+          leadName={prefillLead?.name}
+          channel={prefillLead?.channel}
+          onClose={() => setLogOpen(false)}
+          onConfirmed={() => {
+            setLogOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -502,118 +534,6 @@ function DraftPanel({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function LogReplyModal({
-  prefillLead,
-  onClose,
-  onLogged,
-}: {
-  prefillLead: { id: string; name: string; channel: Channel } | null;
-  onClose: () => void;
-  onLogged: () => void;
-}) {
-  const toast = useToast();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ id: string; businessName: string; city: string | null }[]>([]);
-  const [leadId, setLeadId] = useState<string | null>(prefillLead?.id ?? null);
-  const [leadName, setLeadName] = useState(prefillLead?.name ?? "");
-  const [channel, setChannel] = useState<Channel>(prefillLead?.channel ?? "email");
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (leadId || !query.trim()) {
-      setResults([]);
-      return;
-    }
-    const handle = setTimeout(() => {
-      searchMyLeads(query).then(setResults);
-    }, 250);
-    return () => clearTimeout(handle);
-  }, [query, leadId]);
-
-  async function submit() {
-    if (!leadId || !text.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await logManualReply(leadId, channel, text);
-      toast("Reply logged.");
-      onLogged();
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't log that reply.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-panel border border-rule rounded-card p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-[17px] font-medium mb-3">Log a reply</h2>
-
-        {!leadId ? (
-          <div>
-            <input
-              className="w-full border border-rule rounded-lg px-3 py-2 bg-bg text-sm mb-2"
-              placeholder="Search leads by business name…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              autoFocus
-            />
-            {results.map((r) => (
-              <button
-                key={r.id}
-                className="block w-full text-left text-sm px-3 py-2 rounded hover:bg-panel2"
-                onClick={() => {
-                  setLeadId(r.id);
-                  setLeadName(r.businessName);
-                }}
-              >
-                {r.businessName} {r.city && <span className="text-muted">— {r.city}</span>}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-2.5">
-            <p className="text-sm">
-              For <b>{leadName}</b>{" "}
-              {!prefillLead && (
-                <button className="text-xs text-accent" onClick={() => setLeadId(null)}>
-                  change
-                </button>
-              )}
-            </p>
-            <select className="w-full border border-rule rounded-lg px-2.5 py-1.5 bg-bg text-sm" value={channel} onChange={(e) => setChannel(e.target.value as Channel)}>
-              {(["email", "call", "instagram", "linkedin"] as Channel[]).map((c) => (
-                <option key={c} value={c}>
-                  {CHANNEL_LABEL[c]}
-                </option>
-              ))}
-            </select>
-            <textarea
-              className="w-full border border-rule rounded-lg px-3 py-2 bg-bg text-sm min-h-[100px]"
-              placeholder="Paste what they said…"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-            {error && <p className="text-sm text-stop">{error}</p>}
-            <div className="flex gap-2">
-              <Btn variant="primary" disabled={!text.trim()} loading={busy} onClick={submit}>
-                {busy ? "Logging…" : "Log reply"}
-              </Btn>
-              <Btn variant="ghost" onClick={onClose}>
-                Cancel
-              </Btn>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

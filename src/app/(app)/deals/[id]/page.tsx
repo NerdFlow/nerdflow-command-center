@@ -4,6 +4,15 @@ import { prisma } from "@/server/db";
 import { stringList } from "@/server/json";
 import { computeHealth, computeFlags } from "@/server/deals";
 import { DealDetail } from "@/components/DealDetail";
+import type { Channel } from "@prisma/client";
+
+function replyChannelFor(lead: { email: string | null; linkedinUrl: string | null; phone: string | null; instagramUrl: string | null }): Channel {
+  if (lead.email) return "email";
+  if (lead.linkedinUrl) return "linkedin";
+  if (lead.instagramUrl) return "instagram";
+  if (lead.phone) return "call";
+  return "email";
+}
 
 export default async function DealPage({ params }: { params: { id: string } }) {
   const user = await requireUser();
@@ -75,6 +84,8 @@ export default async function DealPage({ params }: { params: { id: string } }) {
             : null,
         })),
       ].sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())}
+      leadId={deal.leadId}
+      replyChannel={replyChannelFor(deal.lead)}
     />
   );
 }

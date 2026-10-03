@@ -1,4 +1,5 @@
 import { matchOwnerHint, selectRoutedCards } from "@/lib/focusRouting";
+import { outreachBlockReason } from "@/lib/replyLog";
 import { focusRebuildTransactionOptions, withFocusRebuildRetry } from "@/lib/focusIngestTx";
 import { pipelinePersonKey, dateStampFromDb, queueDateAsUtc } from "@/lib/pipelineToday";
 import { writeAuditLog } from "@/server/audit";
@@ -132,7 +133,8 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
             dealCode: input.accepted.find((item) => item.cardId === card.cardId)?.dealCode ?? null,
             source: input.source,
           });
-          const blocked = lead.status === "do_not_contact" || lead.status === "not_fit";
+          const blockReason = outreachBlockReason(lead);
+          const blocked = blockReason !== null;
           const status = blocked ? "dropped" : write.status;
           const data = {
             ownerId: write.assigneeId,
@@ -164,7 +166,7 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
           if (blocked) {
             blockedRejected.push({
               cardId: card.cardId,
-              reason: lead.status === "not_fit" ? "not_a_fit" : "do_not_contact",
+              reason: blockReason ?? "replied",
             });
           } else {
             ids.push(card.cardId);

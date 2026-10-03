@@ -9,7 +9,13 @@ import { setNextStep, setStage } from "@/server/actions/deals";
 import { callClaudeJSON, AiUnavailableError } from "@/server/ai/client";
 import { SYSTEM_PROMPT, buildUserPrompt, buildRewritePrompt, PROMPT_VERSION } from "@/server/ai/prompts/reply-classification";
 import { campaignStrategySchema } from "@/server/strategy";
-import type { LostReason } from "@prisma/client";
+import {
+  leadStatusForConfirmedReply,
+  outreachStopped,
+  REPLY_LABELS,
+  withStopOutreach,
+} from "@/lib/replyLog";
+import type { LostReason, Prisma, ReplyLabel } from "@prisma/client";
 
 const classificationSchema = z.object({
   class: z.enum(["interested", "not_now", "objection", "question", "unsubscribe", "out_of_office", "wrong_person"]),
@@ -22,6 +28,16 @@ const classificationSchema = z.object({
 
 const rewriteSchema = z.object({ draft_reply: z.string() });
 
+/** Reps can work a lead they own, or a Focus card that was routed to them. */
+async function assertCanWorkLead(user: { id: string; role: string; organizationId: string }, lead: { id: string; ownerId: string }) {
+  if (user.role !== "rep" || lead.ownerId === user.id) return;
+  const assigned = await prisma.pipelineTodayRow.findFirst({
+    where: { leadId: lead.id, ownerId: user.id, organizationId: user.organizationId },
+    select: { id: true },
+  });
+  if (!assigned) throw new Error("Not your lead");
+}
+
 async function loadReplyForUser(replyId: string) {
   const user = await requireUser();
   const reply = await prisma.reply.findFirst({
@@ -29,7 +45,7 @@ async function loadReplyForUser(replyId: string) {
     include: { lead: { include: { campaign: { include: { product: true } }, owner: true } } },
   });
   if (!reply) throw new Error("Reply not found");
-  if (user.role === "rep" && reply.lead.ownerId !== user.id) throw new Error("Not your lead");
+  await assertCanWorkLead(user, reply.lead);
   return { user, reply };
 }
 
@@ -57,14 +73,21 @@ export async function getRepliesOverview() {
   const twoWeeksAgo = new Date();
   twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
 
-  const [openReplies, messagedThisWeek, repliedThisWeek, sentTouches] = await Promise.all([
+  const leadScope = repliesLeadScope(user.id, user.organizationId);
+  const [openReplies, loggedReplies, messagedThisWeek, repliedThisWeek, sentTouches] = await Promise.all([
     prisma.reply.findMany({
-      where: { status: "open", lead: { ownerId: user.id, organizationId: user.organizationId } },
+      where: { status: "open", lead: leadScope },
       include: { lead: true },
       orderBy: { receivedAt: "desc" },
     }),
+    prisma.reply.findMany({
+      where: { status: "handled", receivedAt: { gte: twoWeeksAgo }, lead: leadScope },
+      include: { lead: true },
+      orderBy: { receivedAt: "desc" },
+      take: 20,
+    }),
     prisma.touch.count({ where: { userId: user.id, outcome: "sent", occurredAt: { gte: weekAgo } } }),
-    prisma.reply.count({ where: { receivedAt: { gte: weekAgo }, lead: { ownerId: user.id, organizationId: user.organizationId } } }),
+    prisma.reply.count({ where: { receivedAt: { gte: weekAgo }, lead: leadScope } }),
     prisma.touch.findMany({
       where: { userId: user.id, outcome: "sent", occurredAt: { gte: twoWeeksAgo } },
       include: { lead: true },
@@ -98,6 +121,14 @@ export async function getRepliesOverview() {
     channelAccounts: (user.channelAccounts as { gmail?: string; instagram?: string; linkedin?: string }) ?? {},
     summary: { messagedThisWeek, repliedThisWeek, waiting: openReplies.length },
     openReplies: openReplies.map((r) => ({
+      id: r.id,
+      businessName: r.lead.businessName,
+      channel: r.channel,
+      label: r.label,
+      text: r.text,
+      receivedAt: r.receivedAt.toISOString(),
+    })),
+    loggedReplies: loggedReplies.map((r) => ({
       id: r.id,
       businessName: r.lead.businessName,
       channel: r.channel,
@@ -293,7 +324,7 @@ export async function logManualReply(leadId: string, channel: "call" | "email" |
   const user = await requireUser();
   const lead = await prisma.lead.findFirst({ where: { id: leadId, organizationId: user.organizationId } });
   if (!lead) throw new Error("Lead not found");
-  if (user.role === "rep" && lead.ownerId !== user.id) throw new Error("Not your lead");
+  await assertCanWorkLead(user, lead);
 
   const reply = await prisma.reply.create({
     data: { organizationId: user.organizationId, leadId, channel, text, status: "open" },
@@ -301,4 +332,178 @@ export async function logManualReply(leadId: string, channel: "call" | "email" |
   await prisma.lead.update({ where: { id: leadId }, data: { status: "replied" } });
   revalidatePath("/replies");
   return reply.id;
+}
+
+const beginReplySchema = z.object({
+  leadId: z.string().min(1),
+  channel: z.enum(["call", "email", "instagram", "linkedin"]),
+  text: z.string().trim().min(1).max(8000),
+});
+
+const confirmReplySchema = z.object({
+  replyId: z.string().min(1),
+  label: z.enum(REPLY_LABELS),
+  meetingAt: z.string().min(1).optional(),
+  meetingNote: z.string().max(500).optional(),
+});
+
+export type LoggedReplySuggestion = {
+  label: ReplyLabel;
+  why: string;
+  draft: string;
+  followUpDate: string | null;
+};
+
+/**
+ * Paste a reply, store it, and classify it with the existing classifier.
+ * The label is a suggestion until confirmLoggedReply. Nothing is sent.
+ */
+export async function beginLoggedReply(raw: z.input<typeof beginReplySchema>): Promise<{
+  replyId: string;
+  suggestion: LoggedReplySuggestion | null;
+}> {
+  const input = beginReplySchema.parse(raw);
+  const user = await requireUser();
+  const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId: user.organizationId } });
+  if (!lead) throw new Error("Lead not found");
+  await assertCanWorkLead(user, lead);
+
+  const reply = await prisma.reply.create({
+    data: {
+      organizationId: user.organizationId,
+      leadId: lead.id,
+      channel: input.channel,
+      text: input.text,
+      status: "open",
+    },
+  });
+
+  let suggestion: LoggedReplySuggestion | null = null;
+  try {
+    const result = await classifyReply(reply.id);
+    if (result.source === "ai") {
+      suggestion = {
+        label: result.class,
+        why: result.why,
+        draft: result.draft_reply,
+        followUpDate: result.follow_up_date,
+      };
+    }
+  } catch (err) {
+    console.error("[reply] classify failed", err instanceof Error ? err.message : "error");
+  }
+
+  revalidatePath("/replies");
+  return { replyId: reply.id, suggestion };
+}
+
+/** Drop the paste when the rep closes the sheet before confirming the label. */
+export async function discardLoggedReply(replyId: string) {
+  try {
+    const { reply } = await loadReplyForUser(replyId);
+    if (reply.status !== "open" || outreachStopped(reply.lead.signals)) return;
+    await prisma.reply.delete({ where: { id: reply.id } });
+  } catch {
+    return;
+  }
+  revalidatePath("/replies");
+}
+
+/**
+ * The confirmed label is what sticks: deal, finished, do-not-contact, or replied.
+ * Open Focus cards for the lead are removed and later outreach cards are blocked.
+ */
+export async function confirmLoggedReply(raw: z.input<typeof confirmReplySchema>) {
+  const input = confirmReplySchema.parse(raw);
+  const { user, reply } = await loadReplyForUser(input.replyId);
+  const meeting = input.label === "interested" && Boolean(input.meetingAt);
+
+  if (outreachStopped(reply.lead.signals)) {
+    const closed = await prisma.pipelineTodayRow.updateMany({
+      where: { organizationId: user.organizationId, leadId: reply.leadId, status: "open" },
+      data: { status: "dropped" },
+    });
+    return {
+      leadId: reply.leadId,
+      label: reply.label,
+      status: reply.lead.status,
+      closedCards: closed.count,
+    };
+  }
+
+  if (meeting && input.meetingAt && Number.isNaN(new Date(input.meetingAt).getTime())) {
+    throw new Error("Pick a real meeting time.");
+  }
+
+  if (reply.label !== input.label) {
+    await prisma.reply.update({ where: { id: reply.id }, data: { label: input.label } });
+  }
+
+  if (input.label === "unsubscribe") {
+    await applyUnsubscribe(reply.id);
+  } else if (input.label === "not_now") {
+    await prisma.lead.update({
+      where: { id: reply.leadId },
+      data: { status: "finished", nextTouchAt: null, nextChannelOverride: null },
+    });
+    await markHandled(reply.id);
+  } else if (meeting && input.meetingAt) {
+    await bookMeetingFromReply(reply.id, input.meetingAt, input.meetingNote ?? "");
+  } else if (input.label === "interested") {
+    await findOrCreateOpenDeal(reply.lead, user.organizationId);
+    await prisma.lead.update({
+      where: { id: reply.leadId },
+      data: { status: "deal", nextTouchAt: null, nextChannelOverride: null },
+    });
+  } else {
+    await prisma.lead.update({
+      where: { id: reply.leadId },
+      data: { status: "replied", nextTouchAt: null, nextChannelOverride: null },
+    });
+  }
+
+  const fresh = await prisma.lead.findUniqueOrThrow({ where: { id: reply.leadId } });
+  await prisma.lead.update({
+    where: { id: fresh.id },
+    data: {
+      signals: withStopOutreach(fresh.signals) as Prisma.InputJsonValue,
+      nextTouchAt: null,
+      nextChannelOverride: null,
+    },
+  });
+
+  const closed = await prisma.pipelineTodayRow.updateMany({
+    where: { organizationId: user.organizationId, leadId: reply.leadId, status: "open" },
+    data: { status: "dropped" },
+  });
+
+  const status = leadStatusForConfirmedReply(input.label, meeting);
+  await writeAuditLog({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "reply_logged",
+    entityType: "reply",
+    entityId: reply.id,
+    after: {
+      leadId: reply.leadId,
+      label: input.label,
+      leadStatus: status,
+      meeting,
+      closedCards: closed.count,
+    },
+  });
+
+  revalidatePath("/replies");
+  revalidatePath("/focus");
+  revalidatePath("/today");
+  revalidatePath("/deals");
+
+  return { leadId: reply.leadId, label: input.label, status, closedCards: closed.count };
+}
+
+function repliesLeadScope(userId: string, organizationId: string) {
+  return {
+    organizationId,
+    OR: [{ ownerId: userId }, { pipelineTodayRows: { some: { ownerId: userId } } }],
+  };
 }
