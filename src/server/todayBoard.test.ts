@@ -65,6 +65,7 @@ vi.mock("@/server/db", () => ({
       findMany: (args: { where?: PipelineWhere; orderBy?: PipelineOrder | PipelineOrder[] }) => {
         return orderedRows(matchingRows(args.where), args.orderBy);
       },
+      updateMany: async () => ({ count: 0 }),
     },
     auditLog: { findFirst: async () => null },
     touch: { findMany: async () => [] },

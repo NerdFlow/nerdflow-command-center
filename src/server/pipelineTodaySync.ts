@@ -67,7 +67,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function keptStatus(current: LeadStatus): LeadStatus {
   if (current === "do_not_contact" || current === "not_fit" || current === "rejected") return current;
-  if (current === "deal" || current === "replied" || current === "finished") return current;
+  if (current === "deal" || current === "replied" || current === "finished" || current === "needs_contact") return current;
   return "in_cadence";
 }
 

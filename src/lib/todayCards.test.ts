@@ -71,6 +71,19 @@ describe("one card per Today row", () => {
     expect(linkedinRequestReason(lead())).toBe("cold_email_pair");
   });
 
+  it("drops the email and contact form after a bad contact, and keeps LinkedIn", () => {
+    const actions = expandShapeLead(
+      lead({
+        signals: {
+          emailInvalid: true,
+          contactFormUrl: "https://hvac.example/contact",
+        },
+      }),
+      ["call", "email", "linkedin"],
+    );
+    expect(actions.map((action) => action.kind)).toEqual(["linkedin_request"]);
+  });
+
   it("does not collapse a reply into the cold cards", () => {
     const actions = expandShapeLead(
       lead({
