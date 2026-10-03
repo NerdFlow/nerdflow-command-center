@@ -8,7 +8,13 @@ const CHANNELS: Channel[] = ["call", "email", "instagram", "linkedin"];
 
 export default async function FocusPage({ searchParams }: { searchParams: { channel?: string } }) {
   const user = await requireUser();
-  const [board, settings] = await Promise.all([loadFocusBoard(user.id, user.organizationId), getOrgSettings()]);
+  const [board, settings] = await Promise.all([
+    loadFocusBoard(user.id, user.organizationId, {
+      channels: ((user.channelsWorked as string[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[],
+      ownerName: user.fullName,
+    }),
+    getOrgSettings(),
+  ]);
   const allowedChannels = ((user.channelsWorked as string[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
   const raw = searchParams.channel;
   const initialChannel: Channel | "all" | undefined =
@@ -25,7 +31,6 @@ export default async function FocusPage({ searchParams }: { searchParams: { chan
       repTimezone={user.timezone}
       allowedChannels={allowedChannels}
       initialChannel={initialChannel}
-      suppressCall={board.suppressCall}
       sync={board.sync}
     />
   );

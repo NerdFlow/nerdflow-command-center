@@ -2,7 +2,7 @@
 
 The Sales Pipeline bot should push the day through [`docs/FOCUS_INGEST_API.md`](FOCUS_INGEST_API.md). That path does not need a Google service account. The sheet sync below remains as a fallback.
 
-Muqeet's Focus queue comes from the Sales Pipeline **Today** tab when someone syncs the sheet or pastes it. One sheet row is one card. The app never sends email, LinkedIn, or form submissions. A sheet sync only removes open rows it created. Cards written by the ingest API stay.
+Focus cards come from the Sales Pipeline **Today** tab when someone syncs the sheet or pastes it. The app never sends email, LinkedIn, a form, or a call. A sheet sync only removes open rows it created. Cards written by the ingest API stay.
 
 ## Sheet
 
@@ -38,7 +38,7 @@ Sync reads that formula (`valueRenderOption=FORMULA`). The label `Open in Titan 
 | Reply to them | LinkedIn DM (or mailto if the link is mailto) | Copy + Open. Not a connection request. | Column F | Done, Skip, Needs follow-up |
 | Follow-up | Profile, mailto, or form, from the link | Same as that link | Often blank | Done, Skip, Needs follow-up |
 | Anything else (Get ReceptAI live, Negotiate exclusivity, …) | Next action, no link | No Open button | Column F if present | Done, Needs follow-up |
-| Call | Dropped | — | — | Not shown on Muqeet's Focus |
+| Call | Call | The rep who works calls dials it | Not imported | Call outcomes. Nothing dials from here |
 
 Time on the card is column A plus `PKT` (a value that is already `—` stays `—`). Example: `Emails · 5:00 PM PKT`.
 
@@ -46,16 +46,11 @@ Rows with Done `TRUE` are stored and hidden. Two rows for the same person are tw
 
 ## Who sees it
 
-Every synced card is owned by Muqeet. Lookup order:
+A card is one lead plus one channel. Order is a named-person email, then LinkedIn, then call, then needs contact. Contact-form rows are not queued. The lead owner gets the card when they work that channel and still have room under their daily cap. Otherwise it goes to the teammate who works that channel and has the fewest cards today. If nobody works that channel, it is skipped and the lead moves to the next channel.
 
-1. `FOCUS_TODAY_OWNER_EMAIL`
-2. `muqeet@<ALLOWED_EMAIL_DOMAIN>` and `muqeet@nerdflow.tech`
-3. Any active user whose email starts with `muqeet@`
-4. A user whose name is Muqeet
+Routing does not change who owns the lead. Outcomes stay on that lead. Each person sets the channels they work, and a daily cap per channel, on their profile. A lead can set the same thing for anyone on the team. A rep who does not work calls does not see call cards.
 
-Other reps do not get this queue. Call stays available on their Focus. Muqeet's Focus hides the Call picker, Call cards, and Call actions. Call code is still there for everyone else.
-
-On a day that has a sync, his Focus shows those rows ahead of the cadence queue. The leads are marked in cadence with no next touch, so they do not fall back into the normal queue. The Today sheet is the approval; they are not left sitting in the Lead Inbox.
+On a day that has a sync, those rows show ahead of the cadence queue for the person they were routed to. The leads are marked in cadence with no next touch, so they do not fall back into the normal queue. The Today sheet is the approval; they are not left sitting in the Lead Inbox.
 
 An open card that nobody marked Done or Skip stays on Focus on later Asia/Karachi days. The board reads every open row whose queue date is today or earlier, oldest first. Done and skipped cards stay hidden. The board does not rewrite `queue_date` or status, so a later sync still only replaces that day's open rows and cannot reopen a finished card.
 
@@ -63,7 +58,7 @@ Do-not-contact and not-a-fit leads are not turned back into open cards.
 
 ## How to sync
 
-**Sheet (preferred).** Put the service-account JSON in `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` (`client_email` and `private_key`). `GOOGLE_SERVICE_ACCOUNT_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` also work. Share the workbook with that `client_email`. On Focus, Muqeet clicks **Sync from the sheet**.
+**Sheet (preferred).** Put the service-account JSON in `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` (`client_email` and `private_key`). `GOOGLE_SERVICE_ACCOUNT_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` also work. Share the workbook with that `client_email`. On Focus, a lead clicks **Sync from the sheet**.
 
 **Paste.** If those env vars are empty, Focus shows a paste box. Copy the seven columns. For email rows, the Link cell has to be the `HYPERLINK` formula or a raw `mailto:` URL. Copying only the visible label keeps the address when it looks like `Open in Titan → ada@…`, and loses the subject. Turn on **Show formulas** in the sheet (Ctrl+`), then copy.
 

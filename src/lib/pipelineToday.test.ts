@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   TITAN_FROM,
-  focusTodayOwnerCandidates,
   formatPktChip,
   mapPipelineGrid,
   outcomeLabels,
   parseMailtoTarget,
   parseTable,
-  pickFocusTodayOwner,
   pipelineCardStaysVisible,
   pipelineMailtoHref,
   pipelinePersonKey,
@@ -27,12 +25,12 @@ describe("Today tab mapping", () => {
       ["6:00 PM", "Form Co", "Form Co", "Send email", "https://form.example/contact", "Please reach the owner", "FALSE"],
       ["6:10 PM", "Follow Up", "Follow Co", "Follow-up", "https://www.linkedin.com/in/follow", "", "FALSE"],
       ["6:20 PM", "Live", "ReceptAI", "Get ReceptAI live", "https://example.com/ignore", "Ship it", "FALSE"],
-      ["6:30 PM", "Caller", "Call Co", "Call", "tel:555", "Do not import", "FALSE"],
+      ["6:30 PM", "Caller", "Call Co", "Call", "tel:+1-555-0100", "Do not import", "FALSE"],
       ["6:40 PM", "Done Person", "Done Co", "Send email", mailtoFormula, "Already sent", "TRUE"],
     ];
     const result = mapPipelineGrid(grid);
-    expect(result.filteredCalls).toBe(1);
-    expect(result.rows).toHaveLength(7);
+    expect(result.filteredCalls).toBe(0);
+    expect(result.rows).toHaveLength(8);
     expect(result.rows.map((row) => row.kind)).toEqual([
       "send_email",
       "linkedin_request",
@@ -40,11 +38,16 @@ describe("Today tab mapping", () => {
       "contact_form",
       "follow_up",
       "next_action",
+      "call",
       "send_email",
     ]);
-    expect(result.rows[6]?.sheetDone).toBe(true);
-    expect(result.rows.slice(0, 6).every((row) => row.sheetDone === false)).toBe(true);
-    expect(new Set(result.rows.map((row) => row.sheetRow)).size).toBe(7);
+    expect(result.rows[6]?.channel).toBe("call");
+    expect(result.rows[6]?.phone).toBe("+1-555-0100");
+    expect(result.rows[6]?.message).toBe("");
+    expect(result.rows[6]?.sheetDone).toBe(false);
+    expect(result.rows[7]?.sheetDone).toBe(true);
+    expect(result.rows.slice(0, 7).every((row) => row.sheetDone === false)).toBe(true);
+    expect(new Set(result.rows.map((row) => row.sheetRow)).size).toBe(8);
     expect(result.rows[0]?.sheetRow).toBe(2);
 
     const email = result.rows[0]!;
@@ -151,20 +154,3 @@ describe("pipeline card carry-over", () => {
   });
 });
 
-describe("Focus Today owner", () => {
-  const users = [
-    { email: "hadi@nerdflow.tech", fullName: "Hadi" },
-    { email: "muqeet@nerdflow.tech", fullName: "Muqeet" },
-    { email: "baryal@nerdflow.tech", fullName: "Baryal" },
-  ];
-
-  it("picks Muqeet by email, then local-part, then full name", () => {
-    const candidates = focusTodayOwnerCandidates("nerdflow.tech", null);
-    expect(pickFocusTodayOwner(users, candidates)?.email).toBe("muqeet@nerdflow.tech");
-    expect(pickFocusTodayOwner([{ email: "muqeet@other.example", fullName: "Someone" }], ["muqeet@nerdflow.tech"])?.email).toBe(
-      "muqeet@other.example",
-    );
-    expect(pickFocusTodayOwner([{ email: "admin@nerdflow.tech", fullName: "Muqeet" }], ["missing@nerdflow.tech"])?.fullName).toBe("Muqeet");
-    expect(pickFocusTodayOwner([{ email: "hadi@nerdflow.tech", fullName: "Hadi" }], candidates)).toBeNull();
-  });
-});

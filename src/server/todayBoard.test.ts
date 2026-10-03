@@ -19,7 +19,7 @@ type PipelineFixture = {
   company: string;
   actionLabel: string;
   kind: string;
-  channel: "email";
+  channel: "email" | "call" | "linkedin";
   linkKind: string;
   linkUrl: string | null;
   mailtoTo: string | null;
@@ -73,10 +73,6 @@ vi.mock("@/server/db", () => ({
   },
 }));
 
-vi.mock("@/server/focusTodayOwner", () => ({
-  resolveFocusTodayOwner: async () => state.owner,
-}));
-
 vi.mock("@/server/queue", () => ({
   getQueueForUser: async (ownerId: string, limit?: number) => {
     state.queueCalls.push({ ownerId, limit });
@@ -93,6 +89,7 @@ type PipelineWhere = {
   ownerId?: string;
   queueDate?: QueueDateFilter;
   status?: string;
+  channel?: string | { in?: string[] };
 };
 
 type PipelineOrder = { sheetRow?: "asc" | "desc"; queueDate?: "asc" | "desc" };
@@ -111,6 +108,8 @@ function matchingRows(where: PipelineWhere | undefined) {
     if (where.organizationId && row.organizationId !== where.organizationId) return false;
     if (where.ownerId && row.ownerId !== where.ownerId) return false;
     if (where.status && row.status !== where.status) return false;
+    if (typeof where.channel === "string" && row.channel !== where.channel) return false;
+    if (where.channel && typeof where.channel === "object" && where.channel.in && !where.channel.in.includes(row.channel)) return false;
     if (!matchesQueueDate(row.queueDate, where.queueDate)) return false;
     return true;
   });
@@ -171,6 +170,7 @@ function pipelineRow(input: {
   leadId?: string;
   ownerId?: string;
   queueDate?: Date;
+  channel?: PipelineFixture["channel"];
 }): PipelineFixture {
   const leadId = input.leadId ?? input.id;
   const lead = leadRecord(leadId, input.id);
@@ -186,8 +186,8 @@ function pipelineRow(input: {
     contactName: lead.contactName,
     company: lead.businessName,
     actionLabel: "Send email",
-    kind: "send_email",
-    channel: "email",
+    kind: input.channel === "call" ? "call" : "send_email",
+    channel: input.channel ?? "email",
     linkKind: "mailto",
     linkUrl: null,
     mailtoTo: lead.email,
@@ -270,7 +270,7 @@ describe("loadFocusBoard", () => {
     expect(board.cards[4]?.openReplies.map((reply) => reply.id)).toEqual(["reply-1"]);
     expect(board.cards.some((card) => card.pipeline?.rowId === "pipe-done")).toBe(false);
     expect(board.cards.some((card) => card.pipeline?.rowId === "pipe-dropped")).toBe(false);
-    expect(board.suppressCall).toBe(true);
+    expect(board.sync?.openCount).toBe(3);
   });
 
   it("keeps the regular queue when today's pipeline rows are only done or dropped", async () => {
@@ -337,16 +337,25 @@ describe("loadFocusBoard", () => {
     expect(board.cards[0]?.lead.contactName).toBe("Sam's");
   });
 
-  it("does not prepend pipeline cards for a rep who is not the Focus owner", async () => {
-    state.owner = { id: OWNER_ID, fullName: "Muqeet Shah" };
+  it("shows a pipeline card to the rep it was routed to", async () => {
     state.rows = [pipelineRow({ id: "pipe-open", sheetRow: 1, status: "open", leadId: "lead-pipe", ownerId: "rep-2" })];
 
-    const board = await loadFocusBoard("rep-2", ORG_ID);
+    const board = await loadFocusBoard("rep-2", ORG_ID, { channels: ["email", "linkedin"], ownerName: "Baryal" });
 
     expect(state.queueCalls).toEqual([{ ownerId: "rep-2", limit: 50 }]);
-    expect(board.suppressCall).toBe(false);
-    expect(board.cards.map((card) => card.lead.id)).toEqual(["lead-queue", "lead-reply"]);
-    expect(board.cards.some((card) => card.pipeline)).toBe(false);
-    expect(board.sync).toBeNull();
+    expect(board.cards.map((card) => card.lead.id)).toEqual(["lead-pipe", "lead-queue", "lead-reply"]);
+    expect(board.cards[0]?.pipeline?.rowId).toBe("pipe-open");
+    expect(board.sync?.ownerName).toBe("Baryal");
+  });
+
+  it("hides a call card from a rep who does not work calls", async () => {
+    state.rows = [
+      pipelineRow({ id: "pipe-email", sheetRow: 1, status: "open", leadId: "lead-email", channel: "email" }),
+      pipelineRow({ id: "pipe-call", sheetRow: 2, status: "open", leadId: "lead-call", channel: "call" }),
+    ];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID, { channels: ["email", "linkedin"] });
+
+    expect(board.cards.map((card) => card.pipeline?.rowId).filter(Boolean)).toEqual(["pipe-email"]);
   });
 });

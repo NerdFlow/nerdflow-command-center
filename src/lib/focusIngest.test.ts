@@ -126,7 +126,7 @@ describe("focus ingest auth", () => {
     expect(focusIngestAuth(authHeader(), SECRET)).toBe("ok");
   });
 
-  it("returns 401, 403, and 501 from preflight without touching cards", () => {
+  it("returns 401 and 501 from preflight and keeps an owner as a hint", () => {
     const payload = body(sampleCards);
     const unconfigured = preflightRebuild({
       authorization: authHeader(),
@@ -148,21 +148,32 @@ describe("focus ingest auth", () => {
     if (denied.ok) return;
     expect(denied.status).toBe(401);
 
-    const wrongOwner = preflightRebuild({
+    const hinted = preflightRebuild({
       authorization: authHeader(),
       secret: SECRET,
       pathDate: "2026-10-02",
       queryForce: null,
       body: body(sampleCards, { owner: "hadi" }),
     });
-    expect(wrongOwner.ok).toBe(false);
-    if (wrongOwner.ok) return;
-    expect(wrongOwner.status).toBe(403);
+    expect(hinted.ok).toBe(true);
+    if (!hinted.ok) return;
+    expect(hinted.ownerHint).toBe("hadi");
+
+    const noOwner = preflightRebuild({
+      authorization: authHeader(),
+      secret: SECRET,
+      pathDate: "2026-10-02",
+      queryForce: null,
+      body: { datePkt: "2026-10-02", source: "today-rebuild", cards: [sampleCards[0]] },
+    });
+    expect(noOwner.ok).toBe(true);
+    if (!noOwner.ok) return;
+    expect(noOwner.ownerHint).toBeNull();
   });
 });
 
 describe("focus ingest rebuild", () => {
-  it("maps the sample day, rejects Call, and refuses to apply an all-call payload", () => {
+  it("maps the sample day and keeps call cards for routing", () => {
     const call: FocusIngestCard = {
       ...sampleCards[0]!,
       cardId: "2026-10-02-call",
@@ -170,8 +181,12 @@ describe("focus ingest rebuild", () => {
       link: { kind: "none", url: null, label: "Dial" },
     };
     const classified = classifyFocusCards([...sampleCards, call, { ...call, cardId: "2026-10-02-phone", action: "Phone call" }]);
-    expect(classified.rejected.map((item) => item.reason)).toEqual(["call_not_allowed", "call_not_allowed"]);
-    expect(classified.accepted.map((card) => card.cardId)).toEqual(sampleCards.map((card) => card.cardId));
+    expect(classified.rejected).toEqual([]);
+    expect(classified.accepted.map((card) => card.cardId)).toEqual([
+      ...sampleCards.map((card) => card.cardId),
+      "2026-10-02-call",
+      "2026-10-02-phone",
+    ]);
     expect(classified.accepted.map((card) => card.row.kind)).toEqual([
       "linkedin_request",
       "contact_form",
@@ -179,6 +194,8 @@ describe("focus ingest rebuild", () => {
       "send_email",
       "send_email",
       "follow_up",
+      "call",
+      "call",
     ]);
     expect(classified.accepted[0]?.row.message).toBe("");
     expect(classified.accepted[0]?.row.connectNoNote).toBe(true);
@@ -188,7 +205,7 @@ describe("focus ingest rebuild", () => {
     expect(classified.accepted[5]?.row.timeLabel).toBe("—");
     expect(classified.accepted[5]?.dealCode).toBe("NF-049");
     expect(classified.accepted[5]?.row.outcomeMode).toBe("done_skip_followup");
-    expect(classified.accepted.some((card) => card.row.actionLabel.toLowerCase().includes("call"))).toBe(false);
+    expect(classified.accepted.some((card) => card.row.kind === "call")).toBe(true);
 
     const mixed = preflightRebuild({
       authorization: authHeader(),
@@ -199,8 +216,8 @@ describe("focus ingest rebuild", () => {
     });
     expect(mixed.ok).toBe(true);
     if (!mixed.ok) return;
-    expect(mixed.rejected).toEqual([{ cardId: "2026-10-02-call", reason: "call_not_allowed" }]);
-    expect(mixed.accepted).toHaveLength(6);
+    expect(mixed.rejected).toEqual([]);
+    expect(mixed.accepted).toHaveLength(7);
     expect(sheetRowForWriteback(mixed.accepted[0]!.cardId, mixed.accepted[0]!.row.sheetRow)).toBeNull();
     expect(sheetRowForWriteback(`${PIPELINE_SPREADSHEET_ID}:${PIPELINE_TODAY_SHEET_ID}:2026-10-02:4`, 4)).toBe(4);
 
@@ -211,17 +228,16 @@ describe("focus ingest rebuild", () => {
       queryForce: null,
       body: body([call]),
     });
-    expect(onlyCalls.ok).toBe(false);
-    if (onlyCalls.ok) return;
-    expect(onlyCalls.status).toBe(422);
-    expect(onlyCalls.body.rejected).toEqual([{ cardId: "2026-10-02-call", reason: "call_not_allowed" }]);
+    expect(onlyCalls.ok).toBe(true);
+    if (!onlyCalls.ok) return;
+    expect(onlyCalls.accepted.map((card) => card.row.kind)).toEqual(["call"]);
   });
 
   it("is idempotent and keeps same-day Done unless force=true", () => {
     const parsed = focusIngestBodySchema.parse(body(sampleCards));
-    const cards = parsed.cards.map((card) => ({ cardId: card.cardId, done: card.done }));
     const ownerId = "user-muqeet";
-    const first = planFocusRebuild({ datePkt: "2026-10-02", ownerId, cards, existing: [], force: false });
+    const cards = parsed.cards.map((card) => ({ cardId: card.cardId, done: card.done, assigneeId: ownerId }));
+    const first = planFocusRebuild({ datePkt: "2026-10-02", cards, existing: [], force: false });
     expect(statuses(first)).toEqual({
       "2026-10-02-hphs-lee-li": "open",
       "2026-10-02-hphs-lee-email": "open",
@@ -242,22 +258,21 @@ describe("focus ingest rebuild", () => {
     stored.push({ externalKey: "2026-10-02-already-done", queueDate: "2026-10-02", status: "done", ownerId });
     stored.push({ externalKey: "2026-10-02-still-open", queueDate: "2026-10-02", status: "open", ownerId });
 
-    const second = planFocusRebuild({ datePkt: "2026-10-02", ownerId, cards, existing: stored, force: false });
+    const second = planFocusRebuild({ datePkt: "2026-10-02", cards, existing: stored, force: false });
     expect(statuses(second)).toEqual(statuses(first));
     if (!second.ok) return;
     expect(second.dropKeys).toEqual(["2026-10-02-still-open"]);
     expect(second.dropKeys).not.toContain("2026-10-02-already-done");
 
     const afterDrop = stored.map((row) => (row.externalKey === "2026-10-02-still-open" ? { ...row, status: "dropped" } : row));
-    const third = planFocusRebuild({ datePkt: "2026-10-02", ownerId, cards, existing: afterDrop, force: false });
+    const third = planFocusRebuild({ datePkt: "2026-10-02", cards, existing: afterDrop, force: false });
     expect(statuses(third)).toEqual(statuses(first));
     if (!third.ok) return;
     expect(third.dropKeys).toEqual([]);
 
     const doneInPayload = planFocusRebuild({
       datePkt: "2026-10-02",
-      ownerId,
-      cards: [{ cardId: "2026-10-02-already-done", done: false }],
+      cards: [{ cardId: "2026-10-02-already-done", done: false, assigneeId: ownerId }],
       existing: [{ externalKey: "2026-10-02-already-done", queueDate: "2026-10-02", status: "done", ownerId }],
       force: false,
     });
@@ -265,8 +280,7 @@ describe("focus ingest rebuild", () => {
 
     const forced = planFocusRebuild({
       datePkt: "2026-10-02",
-      ownerId,
-      cards: [{ cardId: "2026-10-02-already-done", done: false }],
+      cards: [{ cardId: "2026-10-02-already-done", done: false, assigneeId: "user-caller" }],
       existing: [
         { externalKey: "2026-10-02-already-done", queueDate: "2026-10-02", status: "done", ownerId },
         { externalKey: "2026-10-02-old-done", queueDate: "2026-10-02", status: "done", ownerId },
@@ -279,8 +293,7 @@ describe("focus ingest rebuild", () => {
 
     const stale = planFocusRebuild({
       datePkt: "2026-10-02",
-      ownerId,
-      cards: [{ cardId: "2026-10-01-old", done: false }],
+      cards: [{ cardId: "2026-10-01-old", done: false, assigneeId: ownerId }],
       existing: [{ externalKey: "2026-10-01-old", queueDate: "2026-10-01", status: "open", ownerId }],
       force: false,
     });

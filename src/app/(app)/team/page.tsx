@@ -71,6 +71,8 @@ export default async function TeamPage({ searchParams }: { searchParams: { week?
           role: u.role,
           status: u.status,
           lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
+          channelsWorked: (u.channelsWorked as string[]) ?? [],
+          channelDailyCaps: (u.channelDailyCaps as Partial<Record<"email" | "linkedin" | "call", number>>) ?? {},
           targets: u.targetsOwned.map((t) => ({ id: t.id, metric: t.metric, dailyValue: t.dailyValue, effectiveFrom: t.effectiveFrom.toISOString() })),
         }))}
         currentUserId={user.id}

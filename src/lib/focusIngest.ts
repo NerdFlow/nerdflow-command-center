@@ -6,8 +6,6 @@ import {
   type PipelineOutcomeMode,
 } from "@/lib/pipelineToday";
 
-export const FOCUS_INGEST_OWNER = "muqeet";
-
 const TERMINAL = new Set(["done", "skipped", "follow_up"]);
 
 export const focusOutcomeSchema = z.enum(["done", "skip", "needs_follow_up"]);
@@ -45,7 +43,7 @@ const cardSchema = z.object({
 });
 
 export const focusIngestBodySchema = z.object({
-  owner: z.string().min(1).max(80),
+  owner: z.string().max(80).optional(),
   datePkt: z.string(),
   source: z.string().min(1).max(80),
   force: z.boolean().optional(),
@@ -104,11 +102,6 @@ export function isCallCardAction(action: string): boolean {
   return /\bcalls?\b/.test(text) || /\bphone\b/.test(text);
 }
 
-function identityAllowed(value: string | null | undefined): boolean {
-  if (!value || !value.trim()) return true;
-  return value.trim().toLowerCase().startsWith("muqeet@");
-}
-
 export function cardToCells(card: FocusIngestCard): string[] {
   const time = card.timePkt?.trim() ? card.timePkt.trim() : "—";
   const link = card.link?.url?.trim() || card.link?.label?.trim() || "";
@@ -123,19 +116,7 @@ export function classifyFocusCards(cards: FocusIngestCard[]): { accepted: Accept
       rejected.push({ cardId: card.cardId, reason: "auto_send_forbidden" });
       continue;
     }
-    if (!identityAllowed(card.rules?.fromIdentity)) {
-      rejected.push({ cardId: card.cardId, reason: "from_identity" });
-      continue;
-    }
-    if (isCallCardAction(card.action)) {
-      rejected.push({ cardId: card.cardId, reason: "call_not_allowed" });
-      continue;
-    }
     const mapped = mapPipelineGrid([cardToCells(card)]);
-    if (mapped.filteredCalls > 0) {
-      rejected.push({ cardId: card.cardId, reason: "call_not_allowed" });
-      continue;
-    }
     const row = mapped.rows[0];
     if (!row) {
       rejected.push({ cardId: card.cardId, reason: "incomplete" });
@@ -160,6 +141,7 @@ export type StoredFocusCard = {
 export type RebuildWrite = {
   cardId: string;
   status: "open" | "done" | "skipped" | "follow_up";
+  assigneeId: string;
   preserved: boolean;
 };
 
@@ -168,14 +150,14 @@ export type RebuildPlan =
   | { ok: true; writes: RebuildWrite[]; dropKeys: string[] };
 
 /**
- * Replace one owner's open cards for a PKT day.
+ * Replace one day's open Focus cards. Assignees may differ per card.
  * Same payload twice yields the same statuses. Done / skipped / follow-up rows
- * stay unless force is set. A card id that already lives on another day is 409.
+ * stay unless force is set, and a finished card keeps its assignee.
+ * A card id that already lives on another day is 409.
  */
 export function planFocusRebuild(input: {
   datePkt: string;
-  ownerId: string;
-  cards: { cardId: string; done: boolean }[];
+  cards: { cardId: string; done: boolean; assigneeId: string }[];
   existing: StoredFocusCard[];
   force: boolean;
 }): RebuildPlan {
@@ -185,9 +167,6 @@ export function planFocusRebuild(input: {
 
   for (const card of input.cards) {
     const previous = byKey.get(card.cardId);
-    if (previous && previous.ownerId !== input.ownerId) {
-      return { ok: false, status: 403, error: "That card belongs to another rep", cardId: card.cardId };
-    }
     if (previous && previous.queueDate !== input.datePkt) {
       return {
         ok: false,
@@ -197,15 +176,25 @@ export function planFocusRebuild(input: {
       };
     }
     if (previous && TERMINAL.has(previous.status) && !input.force) {
-      writes.push({ cardId: card.cardId, status: previous.status as RebuildWrite["status"], preserved: true });
+      writes.push({
+        cardId: card.cardId,
+        status: previous.status as RebuildWrite["status"],
+        assigneeId: previous.ownerId,
+        preserved: true,
+      });
       continue;
     }
-    writes.push({ cardId: card.cardId, status: card.done ? "done" : "open", preserved: false });
+    writes.push({
+      cardId: card.cardId,
+      status: card.done ? "done" : "open",
+      assigneeId: card.assigneeId,
+      preserved: false,
+    });
   }
 
   const dropKeys: string[] = [];
   for (const row of input.existing) {
-    if (row.ownerId !== input.ownerId || row.queueDate !== input.datePkt) continue;
+    if (row.queueDate !== input.datePkt) continue;
     if (incoming.has(row.externalKey) || row.status === "dropped") continue;
     if (row.status === "open" || input.force) dropKeys.push(row.externalKey);
   }
@@ -281,6 +270,7 @@ export type RebuildPreflight =
       datePkt: string;
       source: string;
       force: boolean;
+      ownerHint: string | null;
       accepted: AcceptedFocusCard[];
       rejected: RejectedCard[];
     };
@@ -299,9 +289,6 @@ export function preflightRebuild(input: {
   const parsed = focusIngestBodySchema.safeParse(input.body);
   if (!parsed.success) {
     return { ok: false, status: 422, body: { error: "Validation failed", issues: issuesOf(parsed.error) } };
-  }
-  if (parsed.data.owner.trim().toLowerCase() !== FOCUS_INGEST_OWNER) {
-    return { ok: false, status: 403, body: { error: "Focus ingest only accepts owner muqeet" } };
   }
   if (!validDatePkt(input.pathDate) || !validDatePkt(parsed.data.datePkt)) {
     return { ok: false, status: 422, body: { error: "datePkt must be a real YYYY-MM-DD day in Asia/Karachi" } };
@@ -332,6 +319,7 @@ export function preflightRebuild(input: {
     datePkt: parsed.data.datePkt,
     source: parsed.data.source,
     force: parseForceFlag(input.queryForce, parsed.data.force),
+    ownerHint: parsed.data.owner?.trim() || null,
     accepted: classified.accepted.map((card, index) => ({
       ...card,
       row: { ...card.row, sheetRow: index + 1 },

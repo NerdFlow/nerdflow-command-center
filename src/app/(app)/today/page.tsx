@@ -44,7 +44,10 @@ export default async function TodayPage() {
     await Promise.all([
       getOrgSettings(),
       buildBrief(user),
-      loadFocusBoard(user.id, user.organizationId),
+      loadFocusBoard(user.id, user.organizationId, {
+        channels: ((user.channelsWorked as Channel[] | null) ?? ["call", "email", "instagram", "linkedin"]) as Channel[],
+        ownerName: user.fullName,
+      }),
       prisma.deal.findMany({
         where: { ownerId: user.id, stage: { notIn: ["won", "lost"] } },
         include: { people: true, lead: true },
@@ -94,7 +97,7 @@ export default async function TodayPage() {
     board.cards.flatMap((card) =>
       projectTodayActions({
         pipeline: card.pipeline,
-        hideCall: board.suppressCall,
+        hideCall: !allowed.includes("call"),
         allowedChannels: allowed,
         lead: {
           id: card.lead.id,
@@ -117,17 +120,15 @@ export default async function TodayPage() {
   );
 
   const readyChannels = (["call", "email", "instagram", "linkedin"] as Channel[])
-    .filter((ch) => !(board.suppressCall && ch === "call"))
+    .filter((ch) => allowed.includes(ch))
     .map((ch) => ({ ch, count: countByChannel[ch] ?? 0 }))
     .filter((c) => c.count > 0);
   const topChannel = readyChannels.sort((a, b) => b.count - a.count)[0];
-  const focusHref = board.suppressCall || !topChannel ? "/focus" : `/focus?channel=${topChannel.ch}`;
-  const focusLabel = board.suppressCall
-    ? countByChannel.all > 0
+  const focusHref = topChannel ? `/focus?channel=${topChannel.ch}` : "/focus";
+  const focusLabel = topChannel
+    ? `Start ${CHANNEL_LABEL[topChannel.ch].toLowerCase()}s · ${topChannel.count} ready`
+    : countByChannel.all > 0
       ? `Start Focus · ${countByChannel.all} ready`
-      : "Start a Focus session"
-    : topChannel
-      ? `Start ${CHANNEL_LABEL[topChannel.ch].toLowerCase()}s · ${topChannel.count} ready`
       : "Start a Focus session";
 
   const nowLocal = zonedParts(new Date(), user.timezone);
@@ -165,7 +166,7 @@ export default async function TodayPage() {
                 ? `Answer ${openReplyCount === 1 ? "a reply waiting" : `${openReplyCount} replies waiting`} · ${Math.floor(replyAgeHours / 24)}d late`
                 : `Handle ${openReplyCount} ${openReplyCount === 1 ? "reply" : "replies"} first`}
             </Link>
-            {(board.suppressCall ? countByChannel.all > 0 : topChannel) && (
+            {(topChannel || countByChannel.all > 0) && (
               <div>
                 <Link href={focusHref} className="quiet-link inline-flex items-center gap-1">
                   Or {focusLabel.charAt(0).toLowerCase()}

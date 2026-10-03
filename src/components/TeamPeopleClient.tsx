@@ -4,10 +4,16 @@ import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Chip, Panel } from "@/components/ui";
 import { useToast } from "@/components/Toast";
-import { addPerson, changeUserRole, setUserStatus, setTarget } from "@/server/actions/admin";
+import { addPerson, changeUserRole, setUserChannels, setUserStatus, setTarget } from "@/server/actions/admin";
 import { startImpersonation } from "@/server/actions/impersonate";
 import { METRIC_LABEL } from "@/server/targets";
-import type { Role, TargetMetric, UserStatus } from "@prisma/client";
+import type { Channel, Role, TargetMetric, UserStatus } from "@prisma/client";
+
+const WORK_CHANNELS: { value: Channel; label: string }[] = [
+  { value: "email", label: "Email" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "call", label: "Call" },
+];
 
 const ROLES: Role[] = ["rep", "lead"];
 const METRICS: TargetMetric[] = ["leads_verified", "emails", "calls", "instagram_dms", "linkedin_messages"];
@@ -19,6 +25,8 @@ type TeamUser = {
   role: Role;
   status: UserStatus;
   lastLoginAt: string | null;
+  channelsWorked: string[];
+  channelDailyCaps: Partial<Record<"email" | "linkedin" | "call", number>>;
   targets: { id: string; metric: TargetMetric; dailyValue: number; effectiveFrom: string }[];
 };
 
@@ -200,14 +208,15 @@ export function TeamPeopleClient({ users, currentUserId }: { users: TeamUser[]; 
                         </button>
                       )}
                       <button className="text-xs text-muted" onClick={() => setExpanded(expanded === u.id ? null : u.id)}>
-                        Targets
+                        Channels
                       </button>
                     </div>
                   </td>
                 </tr>
                 {expanded === u.id && (
                   <tr className="border-t border-rule bg-panel2">
-                    <td colSpan={5} className="py-3 px-2">
+                    <td colSpan={5} className="py-3 px-2 space-y-4">
+                      <ChannelEditor userId={u.id} channelsWorked={u.channelsWorked} caps={u.channelDailyCaps} onSaved={refresh} />
                       <TargetEditor userId={u.id} targets={u.targets} onSaved={refresh} />
                     </td>
                   </tr>
@@ -217,6 +226,94 @@ export function TeamPeopleClient({ users, currentUserId }: { users: TeamUser[]; 
           </tbody>
         </table>
       </Panel>
+    </div>
+  );
+}
+
+function ChannelEditor({
+  userId,
+  channelsWorked,
+  caps,
+  onSaved,
+}: {
+  userId: string;
+  channelsWorked: string[];
+  caps: Partial<Record<"email" | "linkedin" | "call", number>>;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [channels, setChannels] = useState<Channel[]>(channelsWorked as Channel[]);
+  const [capText, setCapText] = useState<Record<string, string>>({
+    email: caps.email?.toString() ?? "30",
+    linkedin: caps.linkedin?.toString() ?? "30",
+    call: caps.call?.toString() ?? "30",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggle(channel: Channel) {
+    setChannels((prev) => (prev.includes(channel) ? prev.filter((item) => item !== channel) : [...prev, channel]));
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-medium mb-2">Channels and daily caps</p>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {WORK_CHANNELS.map((channel) => (
+          <button
+            key={channel.value}
+            type="button"
+            onClick={() => toggle(channel.value)}
+            className={
+              "text-xs px-2.5 py-1 rounded-lg border " +
+              (channels.includes(channel.value) ? "border-accent bg-accent-soft font-semibold" : "border-rule text-muted")
+            }
+          >
+            {channel.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        {WORK_CHANNELS.filter((channel) => channels.includes(channel.value)).map((channel) => (
+          <label key={channel.value} className="text-xs">
+            {channel.label} cap
+            <input
+              type="number"
+              min={0}
+              className="w-full border border-rule rounded px-2 py-1 bg-bg mt-1 text-sm"
+              value={capText[channel.value]}
+              onChange={(e) => setCapText((prev) => ({ ...prev, [channel.value]: e.target.value }))}
+            />
+          </label>
+        ))}
+      </div>
+      {error && <p className="text-sm text-stop mb-2">{error}</p>}
+      <Btn
+        size="sm"
+        variant="primary"
+        loading={saving}
+        onClick={async () => {
+          setSaving(true);
+          setError(null);
+          try {
+            const channelDailyCaps = Object.fromEntries(
+              WORK_CHANNELS.filter((channel) => channels.includes(channel.value)).map((channel) => [
+                channel.value,
+                Number(capText[channel.value]) || 0,
+              ]),
+            );
+            await setUserChannels(userId, channels, channelDailyCaps);
+            toast("Channels saved. Their Focus queue follows the new settings.");
+            onSaved();
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Couldn't save channels.");
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        {saving ? "Saving…" : "Save channels"}
+      </Btn>
     </div>
   );
 }

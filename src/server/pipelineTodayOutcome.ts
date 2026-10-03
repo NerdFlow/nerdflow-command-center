@@ -53,6 +53,10 @@ export async function commitPipelineTodayOutcome(input: {
   const row = input.row;
   const status = outcomeStatus(input.outcome);
   const occurredAt = input.occurredAt ?? new Date();
+  const openDeal = await prisma.deal.findFirst({
+    where: { leadId: row.leadId, stage: { notIn: ["won", "lost"] } },
+    select: { id: true },
+  });
   const touchOutcome = input.outcome === "needs_follow_up" ? "talked_not_now" : "sent";
   const reason =
     input.outcome === "needs_follow_up"
@@ -83,6 +87,7 @@ export async function commitPipelineTodayOutcome(input: {
       data: {
         organizationId: input.organizationId,
         leadId: row.leadId,
+        dealId: openDeal?.id ?? null,
         userId: input.actorId,
         channel: row.channel,
         step: row.lead.cadenceStep,
@@ -164,6 +169,8 @@ export async function commitPipelineTodayOutcome(input: {
       touchId: touchId.id,
       note: input.note ?? null,
       dueAt: input.dueAt?.toISOString() ?? null,
+      assigneeId: row.ownerId,
+      leadId: row.leadId,
       sheetDualWrite: sheet.todo,
     },
   });

@@ -1,6 +1,6 @@
 # Flow Today ingest API
 
-The Sales Pipeline bot pushes Muqeet's Focus day here. The app stores the cards in `pipeline_today_rows` and reuses the Today-tab mapping from the sheet sync (action, mailto, LinkedIn, follow-up). Nothing is sent to a prospect.
+The Sales Pipeline bot pushes one Focus day here. The app stores the cards in `pipeline_today_rows` and routes each one by channel. Nothing is sent to a prospect.
 
 Google Sheets is not required for this path. Leave `GOOGLE_SHEETS_SERVICE_ACCOUNT_JSON` empty unless you still want the old sheet sync as a fallback. A sheet sync only drops rows it created. It does not remove cards this API wrote.
 
@@ -24,7 +24,7 @@ The cron workflow does not call this API. It still uses `CRON_SECRET`.
 
 `PUT` or `POST /api/v1/focus/days/{datePkt}/rebuild`
 
-`datePkt` is `YYYY-MM-DD` in Asia/Karachi and must match the body. `owner` must be `muqeet` (any other owner is **403**).
+`datePkt` is `YYYY-MM-DD` in Asia/Karachi and must match the body. `owner` is optional. When it matches a user's email, the part before `@`, or their full name, that person is the hint for a new lead's owner. An unknown hint is ignored. Routing does not follow the hint when the lead already has an owner, and it never changes an existing lead's owner.
 
 ```bash
 curl -sS -X PUT "https://sales.nerdflow.cloud/api/v1/focus/days/2026-10-02/rebuild" \
@@ -54,18 +54,23 @@ curl -sS -X PUT "https://sales.nerdflow.cloud/api/v1/focus/days/2026-10-02/rebui
 Response:
 
 ```json
-{ "accepted": 1, "cardIds": ["2026-10-02-hphs-lee-li"], "rejected": [], "queueDate": "2026-10-02" }
+{ "accepted": 1, "cardIds": ["2026-10-02-hphs-lee-li"], "rejected": [], "queueDate": "2026-10-02", "routes": [{ "cardId": "2026-10-02-hphs-lee-li", "assigneeId": "user-id", "leadOwnerId": "user-id", "slot": "linkedin" }] }
 ```
+
+`assigneeId` is who sees the card. `leadOwnerId` is the lead's owner and does not change because of this route. `slot` is `email`, `linkedin`, `call`, or `needs_contact`.
 
 Rules:
 
-- Replaces that day's **open** cards for Muqeet only. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears that day's open cards. A payload where every card is rejected does not change the queue.
+- One card per person. Channel order is a named-person email (not `info@`, `sales@`, or another role inbox), then LinkedIn, then call, then needs contact. A channel the lead owner works, and still has room for, stays with them. Otherwise it goes to the teammate who works that channel and has the fewest cards today. If nobody can take the channel, that channel is skipped and the lead moves to the next one. A finished card on that day stays with the person who already had it.
+- Who works a channel, and the daily cap, comes from that user's settings (`channels_worked` and `channel_daily_caps`). A missing cap uses the org default, or 30.
+- Contact-form links are not stored (`contact_form`). Role inboxes are not a named email (`not_named_email`).
+- Call and Phone actions are stored. A call is queued when anyone works calls and has room. If nobody does, that lead becomes needs contact on the lead owner.
+- Replaces that day's **open** cards for every assignee. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears that day's open cards. A payload where every card is rejected returns **422** and does not change the queue.
 - Open cards from an earlier day stay on Focus until Done or Skip. This route does not drop them, and a later day does not reopen a card that is already done or skipped.
 - The whole day is one database transaction. Send the full list (a 15-card day, or 30+) in one request. Do not split it into batches under 10 cards.
 - Cards already **done**, **skipped**, or **needs follow-up** on that day are left in place. Pass `"force": true` or `?force=true` to drop them and to let a `done: false` card reopen.
-- `action` of Call or Phone is rejected (`call_not_allowed`) and is not stored. A payload whose every card is rejected returns **422** and does not change the queue.
-- `rules.autoSend: true` is rejected. The app never sends email, LinkedIn, or a form.
-- `fromIdentity`, when set, must start with `muqeet@`.
+- `rules.autoSend: true` is rejected. The app never sends email, LinkedIn, a form, or a call.
+- `fromIdentity` is not used for routing and nothing is sent from it.
 - A `cardId` that already belongs to another day is **409**. A duplicate `cardId` in one body is **422**.
 - `dealId` (for example `NF-049`) is stored on the lead as `pipelineDealCode`. It does not create a deal.
 
@@ -103,8 +108,7 @@ Unknown card is **404**. The same outcome again returns **200** with `"idempoten
 | Status | When |
 |---|---|
 | 401 | Bearer missing or wrong |
-| 403 | `owner` is not Muqeet, or the card belongs to another rep |
-| 404 | Muqeet's user is missing, or the card id is unknown |
+| 404 | No active user to route cards, or the card id is unknown |
 | 409 | Card id already used on another day, or the outcome conflicts |
 | 422 | Body does not match the schema, or no card was accepted |
 | 500 | Save failed. Body is `{ "error": "Couldn't save the Today queue", "code": "save_failed" }` (complete uses its own `error` text). Retry the same body once. The VPS log `[focus-ingest] rebuild failed` includes the Prisma code and message. |
@@ -148,7 +152,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/RebuildResult"
         "401": { description: Unauthorized }
-        "403": { description: Wrong owner }
         "409": { description: Stale card id }
         "422": { description: Validation failed }
         "500": { description: "Save failed. code save_failed. Retry the same body." }
@@ -184,9 +187,9 @@ components:
   schemas:
     Rebuild:
       type: object
-      required: [owner, datePkt, source, cards]
+      required: [datePkt, source, cards]
       properties:
-        owner: { type: string, enum: [muqeet] }
+        owner: { type: string, description: Optional owner hint. Email, local part, or full name. }
         datePkt: { type: string }
         source: { type: string, example: today-rebuild }
         force: { type: boolean }
@@ -231,6 +234,15 @@ components:
               cardId: { type: string }
               reason: { type: string }
         queueDate: { type: string }
+        routes:
+          type: array
+          items:
+            type: object
+            properties:
+              cardId: { type: string }
+              assigneeId: { type: string }
+              leadOwnerId: { type: string }
+              slot: { type: string, enum: [email, linkedin, call, needs_contact] }
     Complete:
       type: object
       required: [outcome]

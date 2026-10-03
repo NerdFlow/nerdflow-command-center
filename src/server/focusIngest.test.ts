@@ -19,6 +19,7 @@ vi.mock("@/server/db", () => ({
     orgSettings: { findUnique: (...args: unknown[]) => state.settingsFind(...args) },
     user: { findMany: (...args: unknown[]) => state.userFindMany(...args) },
     pipelineTodayRow: { findMany: (...args: unknown[]) => state.rowFindMany(...args) },
+    lead: { findMany: async () => [] },
     auditLog: { create: (...args: unknown[]) => state.auditCreate(...args) },
     $transaction: (...args: unknown[]) => state.transaction(...args),
   },
@@ -77,6 +78,8 @@ describe("applyFocusIngestRebuild transaction", () => {
         fullName: "Muqeet",
         role: "rep",
         organizationId: "org-1",
+        channelsWorked: ["email", "linkedin", "call"],
+        channelDailyCaps: { email: 30, linkedin: 30, call: 30 },
       },
     ]);
     state.rowFindMany.mockReset().mockResolvedValue([]);

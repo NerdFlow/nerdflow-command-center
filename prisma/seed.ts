@@ -129,6 +129,10 @@ async function main() {
   }
 
   const muqeet = await upsertSeedUser({ name: "Muqeet", role: "lead", password: "cedar-orbit-4821" });
+  await prisma.user.update({
+    where: { id: muqeet.id },
+    data: { channelsWorked: ["email", "linkedin"] },
+  });
   const hadi = await upsertSeedUser({ name: "Hadi", role: "lead", password: "flint-raven-7394" });
   const baryal = await upsertSeedUser({ name: "Baryal", role: "rep", password: "amber-birch-1562" });
 

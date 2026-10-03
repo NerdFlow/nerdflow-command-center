@@ -17,7 +17,11 @@ export type PipelineActionKind =
   | "reply"
   | "contact_form"
   | "follow_up"
-  | "next_action";
+  | "next_action"
+  | "call"
+  | "needs_contact";
+
+export type PipelineChannel = "email" | "linkedin" | "call";
 
 /** Cold rows are Done/Skip. Reply and follow-up add Needs follow-up. Next actions are Done plus Needs follow-up. */
 export type PipelineOutcomeMode = "done_skip" | "done_skip_followup" | "done_followup";
@@ -41,7 +45,7 @@ export type MappedPipelineRow = {
   company: string;
   actionLabel: string;
   kind: PipelineActionKind;
-  channel: "email" | "linkedin";
+  channel: PipelineChannel;
   linkKind: PipelineLinkKind;
   linkUrl: string | null;
   mailtoTo: string | null;
@@ -49,6 +53,7 @@ export type MappedPipelineRow = {
   message: string;
   blankMessage: boolean;
   connectNoNote: boolean;
+  phone: string | null;
   outcomeMode: PipelineOutcomeMode;
   intel: string;
   sheetDone: boolean;
@@ -67,7 +72,7 @@ export type PipelineCardView = {
   timeLabel: string;
   actionLabel: string;
   kind: PipelineActionKind;
-  channel: "email" | "linkedin";
+  channel: PipelineChannel;
   linkKind: PipelineLinkKind;
   linkUrl: string | null;
   mailtoTo: string | null;
@@ -126,27 +131,6 @@ export function sheetRowForWriteback(externalKey: string, sheetRow: number): num
   return sheetRow;
 }
 
-export function focusTodayOwnerCandidates(domain: string | null | undefined, envEmail: string | null | undefined): string[] {
-  const emails = [envEmail, domain ? `muqeet@${domain.trim().toLowerCase()}` : null, "muqeet@nerdflow.tech"];
-  const unique = new Set<string>();
-  for (const email of emails) {
-    const cleaned = email?.trim().toLowerCase();
-    if (cleaned) unique.add(cleaned);
-  }
-  return [...unique];
-}
-
-export function pickFocusTodayOwner<T extends { email: string; fullName: string }>(users: T[], candidates: string[]): T | null {
-  const byEmail = new Map(users.map((user) => [user.email.toLowerCase(), user]));
-  for (const email of candidates) {
-    const hit = byEmail.get(email);
-    if (hit) return hit;
-  }
-  const local = users.find((user) => user.email.toLowerCase().startsWith("muqeet@"));
-  if (local) return local;
-  return users.find((user) => user.fullName.trim().toLowerCase() === "muqeet") ?? null;
-}
-
 export function formatPktChip(raw: string): string {
   const text = raw.trim().replace(/\s+/g, " ");
   if (!text || text === "—" || text === "-" || text === "–") return "—";
@@ -156,6 +140,8 @@ export function formatPktChip(raw: string): string {
 
 export function pipelineTimeChip(kind: PipelineActionKind, timeLabel: string, actionLabel: string): string {
   if (kind === "send_email" || kind === "contact_form") return `Emails · ${timeLabel}`;
+  if (kind === "call") return `Calls · ${timeLabel}`;
+  if (kind === "needs_contact") return `Needs contact · ${timeLabel}`;
   if (kind === "linkedin_request") return `LinkedIn · ${timeLabel}`;
   if (kind === "reply") return `Reply · ${timeLabel}`;
   if (kind === "follow_up") return `Follow-up · ${timeLabel}`;
@@ -242,7 +228,17 @@ function normalizeAction(action: string): string {
 }
 
 function isCallAction(action: string): boolean {
-  return /^call\b/.test(action) || action === "phone" || action.includes("phone call");
+  return /^call\b/.test(action) || action === "phone" || action.includes("phone call") || /\bphone\b/.test(action);
+}
+
+function phoneFromLink(raw: string): string | null {
+  const text = raw.trim();
+  if (!text || /^https?:/i.test(text) || /^mailto:/i.test(text)) return null;
+  const tel = text.match(/tel:\s*([+\d][\d\s().-]{6,})/i);
+  if (tel?.[1]) return tel[1].replace(/\s+/g, " ").trim();
+  const digits = text.replace(/\D/g, "");
+  if (digits.length >= 7) return text;
+  return null;
 }
 
 export function pipelineMailtoHref(row: Pick<MappedPipelineRow, "linkKind" | "mailtoTo" | "mailtoSubject" | "message" | "company">): string | null {
@@ -254,6 +250,8 @@ export function pipelineMailtoHref(row: Pick<MappedPipelineRow, "linkKind" | "ma
 function intelFor(kind: PipelineActionKind, actionLabel: string, linkKind: PipelineLinkKind): string {
   if (kind === "linkedin_request") return "Connect with no note. The message stays blank.";
   if (kind === "send_email") return "Open in Titan and send it yourself.";
+  if (kind === "call") return "Call them yourself. Nothing dials from here.";
+  if (kind === "needs_contact") return "No named email, LinkedIn, or call could be staffed. Find a way to reach them. Nothing sends from here.";
   if (kind === "contact_form") return "Open the form and paste the message.";
   if (kind === "reply") return "Reply with the draft. This is not a connection request.";
   if (kind === "follow_up") {
@@ -265,7 +263,7 @@ function intelFor(kind: PipelineActionKind, actionLabel: string, linkKind: Pipel
   return "Pipeline next action. No call from here.";
 }
 
-function mapDataRow(sheetRow: number, cells: string[]): MappedPipelineRow | "call" | "blank" {
+function mapDataRow(sheetRow: number, cells: string[]): MappedPipelineRow | "blank" {
   const time = cells[0] ?? "";
   const name = (cells[1] ?? "").trim();
   const companyRaw = (cells[2] ?? "").trim();
@@ -275,9 +273,31 @@ function mapDataRow(sheetRow: number, cells: string[]): MappedPipelineRow | "cal
   const done = parseSheetDone(cells[6] ?? "");
   const action = normalizeAction(actionRaw);
   if (!name && !companyRaw && !action) return "blank";
-  if (isCallAction(action)) return "call";
 
   const company = companyRaw || name || "Unknown";
+  if (isCallAction(action)) {
+    return {
+      sheetRow,
+      timeLabel: formatPktChip(time),
+      contactName: name,
+      company,
+      actionLabel: actionRaw || "Call",
+      kind: "call",
+      channel: "call",
+      linkKind: "none",
+      linkUrl: null,
+      mailtoTo: null,
+      mailtoSubject: null,
+      message: "",
+      blankMessage: false,
+      connectNoNote: false,
+      phone: phoneFromLink(linkRaw),
+      outcomeMode: "done_skip",
+      intel: intelFor("call", actionRaw, "none"),
+      sheetDone: done,
+    };
+  }
+
   const link = inspectLink(linkRaw);
   let kind: PipelineActionKind = "next_action";
   if (action.includes("linkedin request") || action === "connection request" || action.includes("connect on linkedin")) {
@@ -296,7 +316,7 @@ function mapDataRow(sheetRow: number, cells: string[]): MappedPipelineRow | "cal
   let message = messageRaw;
   let connectNoNote = false;
   let blankMessage = false;
-  let channel: "email" | "linkedin" = "email";
+  let channel: PipelineChannel = "email";
 
   if (kind === "linkedin_request") {
     linkKind = "linkedin_profile";
@@ -362,6 +382,7 @@ function mapDataRow(sheetRow: number, cells: string[]): MappedPipelineRow | "cal
     message,
     blankMessage,
     connectNoNote,
+    phone: null,
     outcomeMode,
     intel: intelFor(kind, actionRaw, linkKind),
     sheetDone: done,
@@ -375,10 +396,9 @@ function looksLikeHeader(cells: string[]): boolean {
   return a === "time" && (b === "name" || d === "action");
 }
 
-/** Today tab columns A–G. Header row optional. Call rows are removed. Done rows stay so sync can hide them. */
+/** Today tab columns A–G. Header row optional. Call rows stay so routing can assign them. Done rows stay so sync can hide them. */
 export function mapPipelineGrid(grid: string[][]): PipelineGridResult {
   const rows: MappedPipelineRow[] = [];
-  let filteredCalls = 0;
   let blankSkipped = 0;
   const start = grid.length > 0 && looksLikeHeader(grid[0] ?? []) ? 1 : 0;
   for (let index = start; index < grid.length; index += 1) {
@@ -388,13 +408,9 @@ export function mapPipelineGrid(grid: string[][]): PipelineGridResult {
       blankSkipped += 1;
       continue;
     }
-    if (mapped === "call") {
-      filteredCalls += 1;
-      continue;
-    }
     rows.push(mapped);
   }
-  return { rows, filteredCalls, blankSkipped };
+  return { rows, filteredCalls: 0, blankSkipped };
 }
 
 export function parseTable(text: string): string[][] {

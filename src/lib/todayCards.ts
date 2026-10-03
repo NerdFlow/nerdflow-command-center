@@ -18,7 +18,8 @@ export type TodayActionKind =
   | "call"
   | "instagram"
   | "follow_up"
-  | "next_action";
+  | "next_action"
+  | "needs_contact";
 
 export type TodayOutcomeMode = "call" | PipelineOutcomeMode;
 
@@ -163,6 +164,7 @@ export function expandShapeLead(lead: TodayShapeLead, allowedChannels: Channel[]
 
 export function actionVisible(action: TodayAction, filter: Channel | "all"): boolean {
   if (filter === "all") return true;
+  if (action.kind === "needs_contact") return action.channel === filter;
   if (action.kind === "next_action") return false;
   if (action.kind === "follow_up") {
     if (filter === "email") return action.linkKind === "mailto" || action.linkKind === "contact_form";
@@ -303,6 +305,8 @@ export function actionKicker(kind: TodayActionKind, actionLabel?: string | null)
       return "Follow-up";
     case "next_action":
       return actionLabel?.trim() || "Next action";
+    case "needs_contact":
+      return "Needs contact";
     default:
       return "Calling";
   }

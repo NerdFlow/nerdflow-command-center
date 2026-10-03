@@ -2,14 +2,13 @@ import { prisma } from "@/server/db";
 import { getQueueForUser } from "@/server/queue";
 import { resolveLeadChannel } from "@/server/cadence";
 import { formatLastTouch } from "@/lib/focusCallCard";
-import { resolveFocusTodayOwner } from "@/server/focusTodayOwner";
 import { sheetsConfigStatus } from "@/server/googleSheets";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { CoachDirectoryLead, ShapeCard, ShapeReply } from "@/lib/shapeCard";
 import type { PipelineActionKind, PipelineCardView, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import { presentLeadName } from "@/lib/leadNames";
 import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
-import type { LeadSource, Prisma } from "@prisma/client";
+import type { Channel, LeadSource, Prisma } from "@prisma/client";
 
 export type FocusSyncState = {
   sheetsConfigured: boolean;
@@ -47,9 +46,9 @@ type PipelineRowWithLead = Prisma.PipelineTodayRowGetPayload<{
   include: { lead: { include: { campaign: { include: { product: true } } } } };
 }>;
 
-function pipelineCard(row: PipelineRowWithLead): ShapeCard {
+function pipelineCard(row: PipelineRowWithLead, lastTouchLabel: string | null): ShapeCard {
   const lead = row.lead;
-  const channel = row.channel === "linkedin" ? "linkedin" : "email";
+  const channel = row.channel === "linkedin" || row.channel === "call" || row.channel === "instagram" ? row.channel : "email";
   const view: PipelineCardView = {
     rowId: row.id,
     sheetRow: row.sheetRow,
@@ -90,7 +89,7 @@ function pipelineCard(row: PipelineRowWithLead): ShapeCard {
       fitReasons: (lead.fitReasons as string[] | null) ?? [row.intel],
       fitFlags: (lead.fitFlags as string[] | null) ?? [],
       source: lead.source,
-      lastTouchLabel: null,
+      lastTouchLabel,
     },
     campaign: {
       id: lead.campaign.id,
@@ -129,24 +128,36 @@ async function loadSyncState(ownerId: string, organizationId: string, ownerName:
   };
 }
 
-export async function loadFocusBoard(ownerId: string, organizationId: string) {
-  const focusOwner = await resolveFocusTodayOwner(organizationId);
-  const suppressCall = focusOwner?.id === ownerId;
+export async function loadFocusBoard(
+  ownerId: string,
+  organizationId: string,
+  options?: { channels?: Channel[]; ownerName?: string },
+) {
+  const channels = (options?.channels ?? ["call", "email", "instagram", "linkedin"]) as Channel[];
   const queueDate = pktDateStamp();
   const queueDay = queueDateAsUtc(queueDate);
-  const sync = suppressCall && focusOwner ? await loadSyncState(ownerId, organizationId, focusOwner.fullName, queueDate) : null;
+  const sync = await loadSyncState(ownerId, organizationId, options?.ownerName ?? "You", queueDate);
 
-  // Open rows only, including ones queued on an earlier Asia/Karachi day.
-  // Done, skipped, follow-up, and dropped stay off the board. queueDate is
-  // left as stored, so a later sync still only replaces that day's open rows
-  // and a finished card is not reopened. See pipelineCardStaysVisible.
-  const pipelineRows = suppressCall
-    ? await prisma.pipelineTodayRow.findMany({
-        where: visibleOpenPipelineWhere(organizationId, ownerId, queueDay),
-        orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
-        include: { lead: { include: { campaign: { include: { product: true } } } } },
-      })
-    : [];
+  // Open rows assigned to this rep, including ones queued on an earlier Asia/Karachi day.
+  // A channel they no longer work stays off the board even if a stale row still names them.
+  const pipelineRows = await prisma.pipelineTodayRow.findMany({
+    where: { ...visibleOpenPipelineWhere(organizationId, ownerId, queueDay), channel: { in: channels } },
+    orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
+    include: { lead: { include: { campaign: { include: { product: true } } } } },
+  });
+  const pipelineLeadIds = [...new Set(pipelineRows.map((row) => row.leadId))];
+  const pipelineTouches =
+    pipelineLeadIds.length === 0
+      ? []
+      : await prisma.touch.findMany({
+          where: { leadId: { in: pipelineLeadIds }, organizationId },
+          orderBy: { occurredAt: "desc" },
+          take: 200,
+        });
+  const lastTouchByLead = new Map<string, (typeof pipelineTouches)[number]>();
+  for (const touch of pipelineTouches) {
+    if (!lastTouchByLead.has(touch.leadId)) lastTouchByLead.set(touch.leadId, touch);
+  }
 
   const queue = await getQueueForUser(ownerId, 50);
   const queueIds = queue.map((item) => item.lead.id);
@@ -194,7 +205,7 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
   }
 
   const cards: ShapeCard[] = [
-    ...pipelineRows.map(pipelineCard),
+    ...pipelineRows.map((row) => pipelineCard(row, formatLastTouch(lastTouchByLead.get(row.leadId) ?? null))),
     ...queue.map(({ lead, campaign, label }) => ({
       lead: {
         id: lead.id,
@@ -275,7 +286,7 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
 
   const coachLeads = directory.map(coachLeadFromRow);
 
-  return { cards, coachLeads, suppressCall, sync };
+  return { cards, coachLeads, sync };
 }
 
 function coachLeadFromRow(lead: {
