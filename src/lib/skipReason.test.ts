@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyLoad, rewriteForSlot, type RouteRep } from "@/lib/focusRouting";
+import { emptyLoad, type RouteRep } from "@/lib/focusRouting";
 import type { MappedPipelineRow } from "@/lib/pipelineToday";
 import {
   cardForBadContactRoute,
@@ -81,7 +81,8 @@ describe("skip reasons", () => {
       leadOwnerId: "muqeet",
     });
     expect(route).toEqual({ slot: "linkedin", assigneeId: "muqeet" });
-    const card = cardForBadContactRoute(emailRow(), route, { email: "lee@example.com", linkedinUrl: route.slot ? "https://www.linkedin.com/in/lee-kurtas" : null, phone: "512-555-0100" }, reps[0]);
+    if (!route) throw new Error("expected a LinkedIn route");
+    const card = cardForBadContactRoute(emailRow(), route, { email: "lee@example.com", linkedinUrl: "https://www.linkedin.com/in/lee-kurtas", phone: "512-555-0100" }, reps[0]);
     expect(card.kind).toBe("linkedin_request");
     expect(card.linkKind).toBe("linkedin_profile");
     expect(card.kind).not.toBe("contact_form");
@@ -97,15 +98,16 @@ describe("skip reasons", () => {
       defaultCap: 30,
       leadOwnerId: "mail",
     });
-    expect(route.slot).toBe("call");
-    expect(route.assigneeId).toBe("caller");
+    expect(route?.slot).toBe("call");
+    expect(route?.assigneeId).toBe("caller");
+    if (!route) throw new Error("expected a call route");
     const card = cardForBadContactRoute(emailRow(), route, { email: "lee@example.com", linkedinUrl: null, phone: "512-555-0100" }, reps[0]);
     expect(card.kind).toBe("call");
     expect(card.channel).toBe("call");
     expect(card.linkKind).not.toBe("contact_form");
   });
 
-  it("sets needs_contact when there is no LinkedIn URL and nobody can call", () => {
+  it("sets needs_contact and opens no card when there is no profile and nobody can call", () => {
     const decision = decideSkip({
       reason: "bad_contact",
       linkedinUrl: null,
@@ -118,16 +120,14 @@ describe("skip reasons", () => {
     });
     expect(decision.emailInvalid).toBe(true);
     expect(decision.leadStatus).toBe("needs_contact");
-    expect(decision.route?.slot).toBe("needs_contact");
-    const card = cardForBadContactRoute(
-      emailRow(),
-      { slot: "needs_contact", assigneeId: "mail" },
-      { email: "lee@example.com", linkedinUrl: null, phone: "512-555-0100" },
-      rep("mail", ["email"]),
-    );
-    expect(card.kind).toBe("needs_contact");
-    expect(card.kind).not.toBe("contact_form");
-    expect(rewriteForSlot(emailRow(), "needs_contact", { email: null, linkedinUrl: null, phone: null }, undefined).linkKind).not.toBe("contact_form");
+    expect(decision.route).toBeNull();
+    expect(routeAfterBadContact({
+      linkedinUrl: null,
+      phone: null,
+      reps: [rep("mail", ["email", "call"])],
+      defaultCap: 30,
+      leadOwnerId: "mail",
+    })).toBeNull();
   });
 
   it("stops outreach for not a fit and already in touch, and leaves other as a card skip", () => {
@@ -211,7 +211,7 @@ describe("skip reasons", () => {
       todayPkt: today,
       currentSlot: "call",
     });
-    expect(onCall.route?.slot).toBe("needs_contact");
+    expect(onCall.route).toBeNull();
     expect(onCall.leadStatus).toBe("needs_contact");
   });
 });

@@ -1,7 +1,6 @@
 import { leadHasPhone } from "@/lib/focusQueue";
 import {
   anyoneWorks,
-  displayChannelFor,
   pickAssignee,
   rewriteForSlot,
   type RouteRep,
@@ -53,7 +52,8 @@ export function linkedinProfileUrl(linkedinUrl: string | null | undefined, linkK
 
 /**
  * After a bad email: LinkedIn when a profile URL exists, otherwise a call
- * when there is a phone and someone works calls, otherwise needs contact.
+ * when there is a phone and someone works calls. No profile and no call
+ * path returns null. The caller sets the lead status and does not open a card.
  * Never a contact form.
  */
 export function routeAfterBadContact(input: {
@@ -62,7 +62,7 @@ export function routeAfterBadContact(input: {
   reps: RouteRep[];
   defaultCap: number;
   leadOwnerId: string;
-}): { slot: "linkedin" | "call" | "needs_contact"; assigneeId: string } {
+}): { slot: "linkedin" | "call"; assigneeId: string } | null {
   if (input.linkedinUrl) {
     const assignee =
       pickAssignee({
@@ -83,7 +83,7 @@ export function routeAfterBadContact(input: {
       }) ?? input.leadOwnerId;
     return { slot: "call", assigneeId: assignee };
   }
-  return { slot: "needs_contact", assigneeId: input.leadOwnerId };
+  return null;
 }
 
 export type SkipCardSlot = "email" | "linkedin" | "call" | "needs_contact";
@@ -99,8 +99,8 @@ export type SkipDecision = {
 
 /**
  * Bad contact always kills the email. LinkedIn is next when a profile exists,
- * then a call, then needs contact. If this card is already that slot, take the
- * one after it so the same card is not opened twice.
+ * then a call. If this card is already that slot, take the one after it.
+ * No remaining channel means no replacement card.
  */
 export function badContactRoute(input: {
   linkedinUrl: string | null;
@@ -109,15 +109,12 @@ export function badContactRoute(input: {
   defaultCap: number;
   leadOwnerId: string;
   currentSlot: SkipCardSlot | null;
-}): { slot: "linkedin" | "call" | "needs_contact"; assigneeId: string } | null {
+}): { slot: "linkedin" | "call"; assigneeId: string } | null {
   let route = routeAfterBadContact(input);
-  if (input.currentSlot === "linkedin" && route.slot === "linkedin") {
+  if (input.currentSlot === "linkedin" && route?.slot === "linkedin") {
     route = routeAfterBadContact({ ...input, linkedinUrl: null });
   }
-  if (input.currentSlot && route.slot === input.currentSlot) {
-    if (input.currentSlot === "needs_contact") return null;
-    return { slot: "needs_contact", assigneeId: input.leadOwnerId };
-  }
+  if (route && input.currentSlot && route.slot === input.currentSlot) return null;
   return route;
 }
 
@@ -147,7 +144,7 @@ export function decideSkip(input: {
     return {
       cardStatus: "skipped",
       returnsOn: null,
-      leadStatus: !route || route.slot === "needs_contact" ? "needs_contact" : null,
+      leadStatus: route ? null : "needs_contact",
       stopOutreach: false,
       emailInvalid: true,
       route,
@@ -193,17 +190,22 @@ export function decideSkip(input: {
   };
 }
 
-/** The replacement card. Contact forms are not a slot this can produce. */
+/** LinkedIn or call replacement. Never a contact form and never a needs-contact card. */
 export function cardForBadContactRoute(
   row: MappedPipelineRow,
-  route: { slot: "linkedin" | "call" | "needs_contact"; assigneeId: string },
+  route: { slot: "linkedin" | "call"; assigneeId: string },
   lead: { email: string | null; linkedinUrl: string | null; phone: string | null },
   rep: RouteRep | undefined,
 ): MappedPipelineRow {
   const next = rewriteForSlot(row, route.slot, lead, rep);
   if (next.kind === "contact_form" || next.linkKind === "contact_form") {
-    return rewriteForSlot(row, "needs_contact", lead, rep ?? { id: route.assigneeId, channels: [], caps: {}, load: { email: 0, linkedin: 0, call: 0 } });
+    return {
+      ...next,
+      kind: route.slot === "call" ? "call" : "linkedin_request",
+      channel: route.slot,
+      linkKind: route.slot === "call" ? "none" : "linkedin_profile",
+      linkUrl: route.slot === "call" ? null : lead.linkedinUrl,
+    };
   }
-  if (route.slot === "needs_contact" && rep) next.channel = displayChannelFor(rep);
   return next;
 }

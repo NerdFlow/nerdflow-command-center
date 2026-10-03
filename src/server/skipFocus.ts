@@ -240,9 +240,25 @@ export async function applyFocusCardSkip(input: {
       });
     }
 
+    const replacement =
+      route && (route.slot === "linkedin" || route.slot === "call")
+        ? { slot: route.slot, assigneeId: route.assigneeId }
+        : null;
+    if (input.reason === "bad_contact" && !replacement) {
+      await tx.pipelineTodayRow.updateMany({
+        where: {
+          organizationId: input.organizationId,
+          leadId: input.lead.id,
+          status: { in: ["open", "snoozed"] },
+          ...(input.row ? { id: { not: input.row.id } } : {}),
+        },
+        data: { status: "dropped" },
+      });
+    }
+
     let routedCardId: string | null = null;
-    if (input.row && route) {
-      const kind = route.slot === "linkedin" ? "linkedin_request" : route.slot === "call" ? "call" : "needs_contact";
+    if (input.row && replacement) {
+      const kind = replacement.slot === "linkedin" ? "linkedin_request" : "call";
       const existing = await tx.pipelineTodayRow.findFirst({
         where: {
           organizationId: input.organizationId,
@@ -256,44 +272,48 @@ export async function applyFocusCardSkip(input: {
       if (existing) {
         routedCardId = existing.externalKey;
       } else {
-        const rep = reps.find((item) => item.id === route.assigneeId);
+        const rep = reps.find((item) => item.id === replacement.assigneeId);
         const next = cardForBadContactRoute(
           mappedFromRow(input.row, input.lead),
-          { slot: route.slot as "linkedin" | "call" | "needs_contact", assigneeId: route.assigneeId },
+          { slot: replacement.slot, assigneeId: replacement.assigneeId },
           input.lead,
           rep,
         );
-        const externalKey = `${input.row.externalKey}:routed:${route.slot}`.slice(0, 180);
-        const created = await tx.pipelineTodayRow.upsert({
-          where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey } },
-          create: {
-            organizationId: input.organizationId,
-            externalKey,
-            ownerId: route.assigneeId,
-            leadId: input.lead.id,
-            queueDate: input.row.queueDate,
-            sheetRow: input.row.sheetRow,
-            timeLabel: input.row.timeLabel,
-            contactName: input.row.contactName,
-            company: input.row.company,
-            actionLabel: next.actionLabel,
-            kind: next.kind,
-            channel: next.channel,
-            linkKind: next.linkKind,
-            linkUrl: next.linkUrl,
-            mailtoTo: next.mailtoTo,
-            mailtoSubject: next.mailtoSubject,
-            message: next.message,
-            connectNoNote: next.connectNoNote,
-            outcomeMode: next.outcomeMode,
-            intel: next.intel,
-            status: "open",
-            held: true,
-            sheetDone: false,
-          },
-          update: { status: "open", held: true, ownerId: route.assigneeId },
-        });
-        routedCardId = created.externalKey;
+        if (next.kind === "needs_contact" || next.kind === "contact_form" || next.linkKind === "contact_form") {
+          routedCardId = null;
+        } else {
+          const externalKey = `${input.row.externalKey}:routed:${replacement.slot}`.slice(0, 180);
+          const created = await tx.pipelineTodayRow.upsert({
+            where: { organizationId_externalKey: { organizationId: input.organizationId, externalKey } },
+            create: {
+              organizationId: input.organizationId,
+              externalKey,
+              ownerId: replacement.assigneeId,
+              leadId: input.lead.id,
+              queueDate: input.row.queueDate,
+              sheetRow: input.row.sheetRow,
+              timeLabel: input.row.timeLabel,
+              contactName: input.row.contactName,
+              company: input.row.company,
+              actionLabel: next.actionLabel,
+              kind: next.kind,
+              channel: next.channel,
+              linkKind: next.linkKind,
+              linkUrl: next.linkUrl,
+              mailtoTo: next.mailtoTo,
+              mailtoSubject: next.mailtoSubject,
+              message: next.message,
+              connectNoNote: next.connectNoNote,
+              outcomeMode: next.outcomeMode,
+              intel: next.intel,
+              status: "open",
+              held: true,
+              sheetDone: false,
+            },
+            update: { status: "open", held: true, ownerId: replacement.assigneeId },
+          });
+          routedCardId = created.externalKey;
+        }
       }
     }
 

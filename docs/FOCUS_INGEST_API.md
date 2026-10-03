@@ -102,7 +102,7 @@ curl -sS -X POST "https://sales.nerdflow.cloud/api/v1/focus/cards/2026-10-02-hph
   -d '{"outcome":"skip","reason":"not_now","dueDate":"2026-10-10"}'
 ```
 
-`outcome` is `done`, `skip`, or `needs_follow_up`. Skip is allowed on every card and requires `reason`: `bad_contact`, `wrong_person`, `not_fit`, `already_in_touch`, `not_now`, or `other`. The response includes that reason, the note, the lead id, and when a bad contact is rerouted, `routedCardId`. Nothing is sent.
+`outcome` is `done`, `skip`, or `needs_follow_up`. Skip is allowed on every card and requires `reason`: `bad_contact`, `wrong_person`, `not_fit`, `already_in_touch`, `not_now`, or `other`. The response includes that reason, the note, the lead id, and when a bad contact is rerouted to LinkedIn or a call, `routedCardId`. A bad contact with no profile URL and no call path sets the lead status to `needs_contact` and opens no card (`routedCardId` is null). Nothing is sent.
 
 Unknown card is **404**. The same skip reason again returns **200** with `"idempotent": true` and does not write a second skip. A different outcome on a finished card is **409**.
 
