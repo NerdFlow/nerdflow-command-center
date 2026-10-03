@@ -8,6 +8,7 @@ import {
   parseMailtoTarget,
   parseTable,
   pickFocusTodayOwner,
+  pipelineCardStaysVisible,
   pipelineMailtoHref,
   pipelinePersonKey,
   pipelineTimeChip,
@@ -128,6 +129,25 @@ describe("Today tab mapping", () => {
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]?.mailtoTo).toBe("ada@example.com");
     expect(result.rows[0]?.message).toBe("Hi, Ada");
+  });
+});
+
+describe("pipeline card carry-over", () => {
+  const today = "2026-10-03";
+
+  it("keeps an untouched open card on a later day", () => {
+    expect(pipelineCardStaysVisible("open", "2026-10-02", today)).toBe(true);
+    expect(pipelineCardStaysVisible("open", today, today)).toBe(true);
+  });
+
+  it("leaves done and skipped cards hidden, including ones from earlier days", () => {
+    expect(pipelineCardStaysVisible("done", "2026-10-02", today)).toBe(false);
+    expect(pipelineCardStaysVisible("skipped", "2026-10-02", today)).toBe(false);
+    expect(pipelineCardStaysVisible("done", today, today)).toBe(false);
+    expect(pipelineCardStaysVisible("skipped", today, today)).toBe(false);
+    expect(pipelineCardStaysVisible("follow_up", "2026-10-02", today)).toBe(false);
+    expect(pipelineCardStaysVisible("dropped", "2026-10-02", today)).toBe(false);
+    expect(pipelineCardStaysVisible("open", "2026-10-04", today)).toBe(false);
   });
 });
 

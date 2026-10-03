@@ -93,6 +93,15 @@ export function queueDateAsUtc(stamp: string): Date {
   return new Date(`${stamp}T00:00:00.000Z`);
 }
 
+/**
+ * An open pipeline card stays on Focus on later Asia/Karachi days.
+ * Done, skipped, follow-up, and dropped cards stay off the board.
+ * Both stamps are `YYYY-MM-DD`.
+ */
+export function pipelineCardStaysVisible(status: string, queueDate: string, todayPkt: string): boolean {
+  return status === "open" && queueDate <= todayPkt;
+}
+
 export function pipelinePersonKey(company: string, name: string): string {
   const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
   return `pipeline:${normalize(company)}|${normalize(name)}`;

@@ -59,7 +59,8 @@ Response:
 
 Rules:
 
-- Replaces that day's **open** cards for Muqeet only. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears the open cards. A payload where every card is rejected does not change the queue.
+- Replaces that day's **open** cards for Muqeet only. Sending the same body again is safe and returns the same card ids. An empty `cards` array clears that day's open cards. A payload where every card is rejected does not change the queue.
+- Open cards from an earlier day stay on Focus until Done or Skip. This route does not drop them, and a later day does not reopen a card that is already done or skipped.
 - The whole day is one database transaction. Send the full list (a 15-card day, or 30+) in one request. Do not split it into batches under 10 cards.
 - Cards already **done**, **skipped**, or **needs follow-up** on that day are left in place. Pass `"force": true` or `?force=true` to drop them and to let a `done: false` card reopen.
 - `action` of Call or Phone is rejected (`call_not_allowed`) and is not stored. A payload whose every card is rejected returns **422** and does not change the queue.
