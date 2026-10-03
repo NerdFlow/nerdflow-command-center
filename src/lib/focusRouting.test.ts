@@ -17,10 +17,11 @@ function rep(id: string, channels: RouteRep["channels"], load: Partial<RouteRep[
 function card(partial: Partial<FocusIngestCard> & Pick<FocusIngestCard, "cardId" | "name" | "action">): MappedPipelineRow {
   const parsed = classifyFocusCards([
     {
+      ...partial,
       company: partial.company ?? "Acme",
       link: partial.link ?? { kind: "none" },
       message: partial.message ?? "",
-      ...partial,
+      done: partial.done ?? false,
     },
   ]);
   const row = parsed.accepted[0]?.row;
@@ -94,6 +95,7 @@ describe("focus card routing", () => {
   });
 
   it("picks the teammate with the fewest cards today", () => {
+    const owner = rep("muqeet", ["linkedin"], {}, { linkedin: 5 });
     const busy = mailer();
     busy.load.email = 2;
     const quiet = rep("quiet", ["email"], { email: 0 }, { email: 5 });
@@ -102,7 +104,7 @@ describe("focus card routing", () => {
       leadOwners: new Map([["pipeline:acme|lee", "muqeet"]]),
       hintOwnerId: null,
       fallbackOwnerId: "muqeet",
-      reps: [muqeet(), busy, quiet],
+      reps: [owner, busy, quiet],
       defaultCap: 30,
     });
     expect(routed.routed[0]?.assigneeId).toBe("quiet");

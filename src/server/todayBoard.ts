@@ -5,7 +5,7 @@ import { formatLastTouch } from "@/lib/focusCallCard";
 import { sheetsConfigStatus } from "@/server/googleSheets";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { CoachDirectoryLead, ShapeCard, ShapeReply } from "@/lib/shapeCard";
-import type { PipelineActionKind, PipelineCardView, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
+import type { PipelineActionKind, PipelineCardView, PipelineChannel, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import { presentLeadName } from "@/lib/leadNames";
 import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import type { Channel, LeadSource, Prisma } from "@prisma/client";
@@ -48,7 +48,7 @@ type PipelineRowWithLead = Prisma.PipelineTodayRowGetPayload<{
 
 function pipelineCard(row: PipelineRowWithLead, lastTouchLabel: string | null): ShapeCard {
   const lead = row.lead;
-  const channel = row.channel === "linkedin" || row.channel === "call" || row.channel === "instagram" ? row.channel : "email";
+  const channel: PipelineChannel = row.channel === "linkedin" || row.channel === "call" ? row.channel : "email";
   const view: PipelineCardView = {
     rowId: row.id,
     sheetRow: row.sheetRow,

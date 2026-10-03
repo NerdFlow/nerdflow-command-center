@@ -409,7 +409,7 @@ export function FocusClient({
       return;
     }
     const kind = row.action.kind;
-    if (kind === "call" || kind === "follow_up" || kind === "next_action") return;
+    if (kind === "call" || kind === "follow_up" || kind === "next_action" || kind === "needs_contact") return;
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
