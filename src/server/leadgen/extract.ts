@@ -1,3 +1,5 @@
+import { presentLeadName } from "@/lib/leadNames";
+
 const FETCH_TIMEOUT_MS = 8_000;
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/g;
@@ -37,6 +39,7 @@ export async function extractSiteContact(url: string): Promise<ExtractedSite | n
     const html = await res.text();
 
     const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    const title = presentLeadName(titleMatch?.[1]) || null;
     const emails = [...html.matchAll(EMAIL_RE)]
       .map((m) => m[0].toLowerCase())
       .filter((e) => !IGNORED_EMAIL_DOMAINS.some((d) => e.endsWith(`@${d}`)) && !e.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i));
@@ -45,7 +48,7 @@ export async function extractSiteContact(url: string): Promise<ExtractedSite | n
     const linkedin = html.match(/linkedin\.com\/company\/[A-Za-z0-9\-]+/i)?.[0];
 
     return {
-      title: titleMatch?.[1]?.trim() || null,
+      title,
       email: emails[0] ?? null,
       phone: phones[0] ?? null,
       instagramUrl: instagram ? `https://${instagram}` : null,

@@ -2,6 +2,7 @@ import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
 import { computeDedupeKey, ruleScore } from "@/server/leads";
 import { AiUnavailableError } from "@/server/ai/client";
+import { leadBusinessName } from "@/lib/leadNames";
 import { extractSiteContact } from "@/server/leadgen/extract";
 import { scoreLead } from "@/server/leadgen/score";
 import { campaignStrategySchema } from "@/server/strategy";
@@ -125,7 +126,7 @@ export async function executeLeadDiscoveryRun(params: {
           organizationId: params.organizationId,
           campaignId: params.campaign.id,
           ownerId: params.campaign.ownerId,
-          businessName: site?.title || business.name,
+          businessName: leadBusinessName({ placesName: business.name, pageTitle: site?.title ?? null }),
           city: params.location,
           website: business.website,
           email: site?.email ?? null,

@@ -55,7 +55,9 @@ Every synced card is owned by Muqeet. Lookup order:
 
 Other reps do not get this queue. Call stays available on their Focus. Muqeet's Focus hides the Call picker, Call cards, and Call actions. Call code is still there for everyone else.
 
-On a day that has a sync, his Focus shows those rows instead of the cadence queue. The leads are marked in cadence with no next touch, so they do not fall back into the normal queue. The Today sheet is the approval; they are not left sitting in the Lead Inbox.
+On a day that has a sync, his Focus shows those rows ahead of the cadence queue. The leads are marked in cadence with no next touch, so they do not fall back into the normal queue. The Today sheet is the approval; they are not left sitting in the Lead Inbox.
+
+An open card that nobody marked Done or Skip stays on Focus on later Asia/Karachi days. The board reads every open row whose queue date is today or earlier, oldest first. Done and skipped cards stay hidden. The board does not rewrite `queue_date` or status, so a later sync still only replaces that day's open rows and cannot reopen a finished card.
 
 Do-not-contact and not-a-fit leads are not turned back into open cards.
 

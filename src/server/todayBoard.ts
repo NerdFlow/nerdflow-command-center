@@ -7,6 +7,7 @@ import { sheetsConfigStatus } from "@/server/googleSheets";
 import type { CampaignStrategy } from "@/server/strategy";
 import type { CoachDirectoryLead, ShapeCard, ShapeReply } from "@/lib/shapeCard";
 import type { PipelineActionKind, PipelineCardView, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
+import { presentLeadName } from "@/lib/leadNames";
 import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import type { LeadSource, Prisma } from "@prisma/client";
 
@@ -26,6 +27,20 @@ function asStrategy(value: unknown): CampaignStrategy {
 
 function asSignals(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function shownName(value: string): string {
+  return presentLeadName(value) || value;
+}
+
+function shownOptionalName(value: string | null): string | null {
+  if (!value) return null;
+  return presentLeadName(value) || value;
+}
+
+/** Open rows on or before this Asia/Karachi day. Done and skipped rows stay excluded. */
+function visibleOpenPipelineWhere(organizationId: string, ownerId: string, today: Date) {
+  return { organizationId, ownerId, status: "open" as const, queueDate: { lte: today } };
 }
 
 type PipelineRowWithLead = Prisma.PipelineTodayRowGetPayload<{
@@ -51,13 +66,13 @@ function pipelineCard(row: PipelineRowWithLead): ShapeCard {
     connectNoNote: row.connectNoNote,
     outcomeMode: (row.outcomeMode as PipelineOutcomeMode) || "done_skip",
     intel: row.intel,
-    company: row.company,
+    company: shownName(row.company),
   };
   return {
     lead: {
       id: lead.id,
-      businessName: lead.businessName,
-      contactName: lead.contactName,
+      businessName: shownName(lead.businessName),
+      contactName: shownOptionalName(lead.contactName),
       contactRole: lead.contactRole,
       city: lead.city,
       region: lead.region,
@@ -94,7 +109,7 @@ function pipelineCard(row: PipelineRowWithLead): ShapeCard {
 async function loadSyncState(ownerId: string, organizationId: string, ownerName: string, queueDate: string): Promise<FocusSyncState> {
   const queueDay = queueDateAsUtc(queueDate);
   const [openCount, last] = await Promise.all([
-    prisma.pipelineTodayRow.count({ where: { organizationId, ownerId, queueDate: queueDay, status: "open" } }),
+    prisma.pipelineTodayRow.count({ where: visibleOpenPipelineWhere(organizationId, ownerId, queueDay) }),
     prisma.auditLog.findFirst({
       where: { organizationId, action: "pipeline_today_synced", entityId: ownerId },
       orderBy: { createdAt: "desc" },
@@ -121,12 +136,14 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
   const queueDay = queueDateAsUtc(queueDate);
   const sync = suppressCall && focusOwner ? await loadSyncState(ownerId, organizationId, focusOwner.fullName, queueDate) : null;
 
-  // Only open rows are pipeline cards. Counting done, skipped, follow-up, or
-  // dropped rows used to hide the regular Focus queue for the rest of the day.
+  // Open rows only, including ones queued on an earlier Asia/Karachi day.
+  // Done, skipped, follow-up, and dropped stay off the board. queueDate is
+  // left as stored, so a later sync still only replaces that day's open rows
+  // and a finished card is not reopened. See pipelineCardStaysVisible.
   const pipelineRows = suppressCall
     ? await prisma.pipelineTodayRow.findMany({
-        where: { organizationId, ownerId, queueDate: queueDay, status: "open" },
-        orderBy: { sheetRow: "asc" },
+        where: visibleOpenPipelineWhere(organizationId, ownerId, queueDay),
+        orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
         include: { lead: { include: { campaign: { include: { product: true } } } } },
       })
     : [];
@@ -181,8 +198,8 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
     ...queue.map(({ lead, campaign, label }) => ({
       lead: {
         id: lead.id,
-        businessName: lead.businessName,
-        contactName: lead.contactName,
+        businessName: shownName(lead.businessName),
+        contactName: shownOptionalName(lead.contactName),
         contactRole: lead.contactRole,
         city: lead.city,
         region: lead.region,
@@ -222,8 +239,8 @@ export async function loadFocusBoard(ownerId: string, organizationId: string) {
     cards.push({
       lead: {
         id: lead.id,
-        businessName: lead.businessName,
-        contactName: lead.contactName,
+        businessName: shownName(lead.businessName),
+        contactName: shownOptionalName(lead.contactName),
         contactRole: lead.contactRole,
         city: lead.city,
         region: lead.region,
@@ -271,8 +288,8 @@ function coachLeadFromRow(lead: {
 }): CoachDirectoryLead {
   return {
     id: lead.id,
-    contactName: lead.contactName,
-    businessName: lead.businessName,
+    contactName: shownOptionalName(lead.contactName),
+    businessName: shownName(lead.businessName),
     channel: resolveLeadChannel({
       strategy: asStrategy(lead.campaign.strategy),
       cadenceStep: lead.cadenceStep,

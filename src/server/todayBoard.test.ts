@@ -62,11 +62,8 @@ vi.mock("@/server/db", () => ({
   prisma: {
     pipelineTodayRow: {
       count: (args: { where?: PipelineWhere }) => matchingRows(args.where).length,
-      findMany: (args: { where?: PipelineWhere; orderBy?: { sheetRow?: "asc" | "desc" } }) => {
-        const rows = matchingRows(args.where);
-        if (args.orderBy?.sheetRow === "asc") rows.sort((a, b) => a.sheetRow - b.sheetRow);
-        if (args.orderBy?.sheetRow === "desc") rows.sort((a, b) => b.sheetRow - a.sheetRow);
-        return rows;
+      findMany: (args: { where?: PipelineWhere; orderBy?: PipelineOrder | PipelineOrder[] }) => {
+        return orderedRows(matchingRows(args.where), args.orderBy);
       },
     },
     auditLog: { findFirst: async () => null },
@@ -89,12 +86,24 @@ vi.mock("@/server/queue", () => ({
 
 import { loadFocusBoard } from "@/server/todayBoard";
 
+type QueueDateFilter = Date | { lte?: Date; gte?: Date };
+
 type PipelineWhere = {
   organizationId?: string;
   ownerId?: string;
-  queueDate?: Date;
+  queueDate?: QueueDateFilter;
   status?: string;
 };
+
+type PipelineOrder = { sheetRow?: "asc" | "desc"; queueDate?: "asc" | "desc" };
+
+function matchesQueueDate(rowDate: Date, filter: QueueDateFilter | undefined) {
+  if (!filter) return true;
+  if (filter instanceof Date) return rowDate.getTime() === filter.getTime();
+  if (filter.lte && rowDate.getTime() > filter.lte.getTime()) return false;
+  if (filter.gte && rowDate.getTime() < filter.gte.getTime()) return false;
+  return true;
+}
 
 function matchingRows(where: PipelineWhere | undefined) {
   return state.rows.filter((row) => {
@@ -102,8 +111,25 @@ function matchingRows(where: PipelineWhere | undefined) {
     if (where.organizationId && row.organizationId !== where.organizationId) return false;
     if (where.ownerId && row.ownerId !== where.ownerId) return false;
     if (where.status && row.status !== where.status) return false;
-    if (where.queueDate && row.queueDate.getTime() !== where.queueDate.getTime()) return false;
+    if (!matchesQueueDate(row.queueDate, where.queueDate)) return false;
     return true;
+  });
+}
+
+function orderedRows(rows: PipelineFixture[], orderBy: PipelineOrder | PipelineOrder[] | undefined) {
+  const orders = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+  return [...rows].sort((a, b) => {
+    for (const order of orders) {
+      if (order.queueDate) {
+        const diff = a.queueDate.getTime() - b.queueDate.getTime();
+        if (diff !== 0) return order.queueDate === "asc" ? diff : -diff;
+      }
+      if (order.sheetRow) {
+        const diff = a.sheetRow - b.sheetRow;
+        if (diff !== 0) return order.sheetRow === "asc" ? diff : -diff;
+      }
+    }
+    return 0;
   });
 }
 
@@ -228,18 +254,20 @@ describe("loadFocusBoard", () => {
 
     expect(state.queueCalls).toEqual([{ ownerId: OWNER_ID, limit: 50 }]);
     expect(board.cards.map((card) => card.lead.id)).toEqual([
+      "lead-yesterday",
       "lead-pipe-1",
       "lead-pipe-2",
       "lead-queue",
       "lead-reply",
     ]);
-    expect(board.cards[0]?.pipeline?.rowId).toBe("pipe-first");
-    expect(board.cards[1]?.pipeline?.rowId).toBe("pipe-later");
-    expect(board.cards[2]?.pipeline).toBeUndefined();
-    expect(board.cards[2]?.label).toBe("Hot");
-    expect(board.cards[3]?.replyOnly).toBe(true);
-    expect(board.cards[3]?.label).toBe("Reply");
-    expect(board.cards[3]?.openReplies.map((reply) => reply.id)).toEqual(["reply-1"]);
+    expect(board.cards[0]?.pipeline?.rowId).toBe("pipe-yesterday");
+    expect(board.cards[1]?.pipeline?.rowId).toBe("pipe-first");
+    expect(board.cards[2]?.pipeline?.rowId).toBe("pipe-later");
+    expect(board.cards[3]?.pipeline).toBeUndefined();
+    expect(board.cards[3]?.label).toBe("Hot");
+    expect(board.cards[4]?.replyOnly).toBe(true);
+    expect(board.cards[4]?.label).toBe("Reply");
+    expect(board.cards[4]?.openReplies.map((reply) => reply.id)).toEqual(["reply-1"]);
     expect(board.cards.some((card) => card.pipeline?.rowId === "pipe-done")).toBe(false);
     expect(board.cards.some((card) => card.pipeline?.rowId === "pipe-dropped")).toBe(false);
     expect(board.suppressCall).toBe(true);
@@ -271,6 +299,42 @@ describe("loadFocusBoard", () => {
     expect(board.cards[0]?.pipeline).toBeUndefined();
     expect(board.cards[1]?.replyOnly).toBe(true);
     expect(board.cards[1]?.openReplies[0]?.text).toBe("Can we talk Thursday?");
+  });
+
+  it("keeps an open card from an earlier day and never brings done or skipped back", async () => {
+    const today = queueDateAsUtc(pktDateStamp());
+    const yesterday = queueDateAsUtc("2020-01-01");
+    const tomorrow = queueDateAsUtc("2099-01-01");
+    state.queue = [];
+    state.replies = [];
+    state.rows = [
+      pipelineRow({ id: "open-today", sheetRow: 2, status: "open", leadId: "lead-today", queueDate: today }),
+      pipelineRow({ id: "open-yesterday", sheetRow: 9, status: "open", leadId: "lead-yesterday", queueDate: yesterday }),
+      pipelineRow({ id: "done-yesterday", sheetRow: 1, status: "done", leadId: "lead-done-y", queueDate: yesterday }),
+      pipelineRow({ id: "skipped-yesterday", sheetRow: 1, status: "skipped", leadId: "lead-skip-y", queueDate: yesterday }),
+      pipelineRow({ id: "follow-yesterday", sheetRow: 1, status: "follow_up", leadId: "lead-follow-y", queueDate: yesterday }),
+      pipelineRow({ id: "open-tomorrow", sheetRow: 1, status: "open", leadId: "lead-tomorrow", queueDate: tomorrow }),
+    ];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID);
+
+    expect(board.cards.map((card) => card.pipeline?.rowId)).toEqual(["open-yesterday", "open-today"]);
+    expect(board.sync?.openCount).toBe(2);
+    expect(board.cards.some((card) => card.lead.id === "lead-done-y" || card.lead.id === "lead-skip-y")).toBe(false);
+  });
+
+  it("shows a Places-style name with HTML entities decoded", async () => {
+    state.rows = [];
+    state.replies = [];
+    const queued = queueItem("lead-queue", "Ada");
+    queued.lead.businessName = "Fish &amp; Chips";
+    queued.lead.contactName = "Sam&#39;s";
+    state.queue = [queued];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID);
+
+    expect(board.cards[0]?.lead.businessName).toBe("Fish & Chips");
+    expect(board.cards[0]?.lead.contactName).toBe("Sam's");
   });
 
   it("does not prepend pipeline cards for a rep who is not the Focus owner", async () => {
