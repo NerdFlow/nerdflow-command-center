@@ -39,7 +39,9 @@ export async function POST(req: NextRequest, context: { params: { cardId: string
     const result = await applyFocusIngestComplete({
       cardId,
       outcome: pre.outcome,
+      reason: pre.reason,
       dueAt: pre.dueAt,
+      returnStamp: pre.returnStamp,
       note: pre.note,
       occurredAt: pre.occurredAt,
     });

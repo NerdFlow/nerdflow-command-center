@@ -264,6 +264,19 @@ describe("focus ingest rebuild", () => {
     expect(second.dropKeys).toEqual(["2026-10-02-still-open"]);
     expect(second.dropKeys).not.toContain("2026-10-02-already-done");
 
+    const held = planFocusRebuild({
+      datePkt: "2026-10-02",
+      cards,
+      existing: [
+        ...stored,
+        { externalKey: "2026-10-02-routed-li", queueDate: "2026-10-02", status: "open", ownerId, held: true },
+      ],
+      force: false,
+    });
+    expect(held.ok).toBe(true);
+    if (!held.ok) return;
+    expect(held.dropKeys).not.toContain("2026-10-02-routed-li");
+
     const afterDrop = stored.map((row) => (row.externalKey === "2026-10-02-still-open" ? { ...row, status: "dropped" } : row));
     const third = planFocusRebuild({ datePkt: "2026-10-02", cards, existing: afterDrop, force: false });
     expect(statuses(third)).toEqual(statuses(first));
@@ -370,9 +383,9 @@ describe("focus ingest complete", () => {
     expect(followOnEmail.status).toBe(422);
 
     const skipOnNext = planComplete({ status: "open", outcomeMode: "done_followup", outcome: "skip" });
-    expect(skipOnNext.ok).toBe(false);
-    if (skipOnNext.ok) return;
-    expect(skipOnNext.status).toBe(422);
+    expect(skipOnNext.ok).toBe(true);
+    if (!skipOnNext.ok) return;
+    expect(skipOnNext.status).toBe("skipped");
 
     const conflict = planComplete({ status: "done", outcomeMode: "done_skip", outcome: "skip" });
     expect(conflict.ok).toBe(false);
@@ -408,5 +421,28 @@ describe("focus ingest complete", () => {
     expect(follow.dueAt?.toISOString()).toBe("2026-10-06T04:00:00.000Z");
     expect(follow.occurredAt?.toISOString()).toBe("2026-10-02T13:40:00.000Z");
     expect(follow.note).toBe("Asked for a quote");
+
+    const skipBare = preflightComplete({ authorization: authHeader(), secret: SECRET, body: { outcome: "skip" } });
+    expect(skipBare.ok).toBe(false);
+    if (!skipBare.ok) expect(skipBare.status).toBe(422);
+
+    const skip = preflightComplete({
+      authorization: authHeader(),
+      secret: SECRET,
+      body: { outcome: "skip", reason: "bad_contact", note: "Bounced" },
+    });
+    expect(skip.ok).toBe(true);
+    if (!skip.ok) return;
+    expect(skip.reason).toBe("bad_contact");
+    expect(skip.note).toBe("Bounced");
+
+    const later = preflightComplete({
+      authorization: authHeader(),
+      secret: SECRET,
+      body: { outcome: "skip", reason: "not_now", dueDate: "2026-10-10" },
+    });
+    expect(later.ok).toBe(true);
+    if (!later.ok) return;
+    expect(later.returnStamp).toBe("2026-10-10");
   });
 });

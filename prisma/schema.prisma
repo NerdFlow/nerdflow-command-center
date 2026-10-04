@@ -85,6 +85,7 @@ enum LeadStatus {
   not_fit
   finished
   do_not_contact
+  needs_contact
 }
 
 enum EmailVerification {
@@ -249,6 +250,7 @@ model Organization {
   notifications Notification[]
   settings      OrgSettings?
   pipelineTodayRows PipelineTodayRow[]
+  focusCardSkips FocusCardSkip[]
 
   @@map("organizations")
 }
@@ -311,6 +313,7 @@ model User {
   researchApproved  Research[]      @relation("ResearchApprovedBy")
   sessions          FocusSession[]
   pipelineTodayRows PipelineTodayRow[]
+  focusCardSkips    FocusCardSkip[]
 
   @@map("users")
 }
@@ -590,6 +593,7 @@ model Lead {
   conversations Conversation[]
   replies       Reply[]
   pipelineTodayRows PipelineTodayRow[]
+  focusCardSkips FocusCardSkip[]
 
   @@index([dedupeKey])
   @@index([ownerId, status, nextTouchAt])
@@ -623,17 +627,46 @@ model PipelineTodayRow {
   mailtoSubject  String?      @map("mailto_subject") @db.Text
   message        String       @default("") @db.Text
   sheetDone      Boolean      @default(false) @map("sheet_done")
-  /// open | done | skipped | follow_up | dropped
+  /// open | done | skipped | follow_up | dropped | snoozed
   status         String       @default("open")
   outcomeMode    String       @map("outcome_mode")
   intel          String       @db.Text
   connectNoNote  Boolean      @default(false) @map("connect_no_note")
+  /// Skip routing created this card. A same-day rebuild leaves it in place.
+  held           Boolean      @default(false)
+  /// When a Not now skip brings the card back. Asia/Karachi calendar day.
+  returnsOn      DateTime?    @map("returns_on") @db.Date
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  skips FocusCardSkip[]
 
   @@unique([organizationId, externalKey])
   @@index([ownerId, queueDate, status])
   @@map("pipeline_today_rows")
+}
+
+/// Why a rep skipped a Focus card. Sales Pipeline reads this back from the complete API.
+model FocusCardSkip {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Pipeline external card id, or the cadence action key when there is no pipeline row.
+  cardId         String    @map("card_id")
+  pipelineRowId  String?   @map("pipeline_row_id")
+  pipelineRow    PipelineTodayRow? @relation(fields: [pipelineRowId], references: [id], onDelete: SetNull)
+  leadId         String    @map("lead_id")
+  lead           Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId         String    @map("user_id")
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reason         String
+  note           String?   @db.Text
+  returnsOn      DateTime? @map("returns_on") @db.Date
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([leadId, createdAt])
+  @@index([cardId])
+  @@map("focus_card_skips")
 }
 
 model Touch {

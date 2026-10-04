@@ -23,12 +23,6 @@ const doneSchema = z.object({
   advanceCadence: z.boolean().optional(),
 });
 
-const skipSchema = z.object({
-  leadId: z.string().min(1),
-  actionKey: z.string().min(1).max(200),
-  kind: z.string().max(40),
-});
-
 const followSchema = z.object({
   leadId: z.string().min(1),
   actionKey: z.string().min(1).max(200),
@@ -207,34 +201,6 @@ export async function completeTodayRow(raw: z.input<typeof doneSchema>) {
   });
   revalidateWork();
   return { touchId, dealId };
-}
-
-export async function skipTodayRow(raw: z.input<typeof skipSchema>) {
-  const params = skipSchema.parse(raw);
-  const user = await requireUser();
-  const lead = await loadLead(params.leadId, user.organizationId);
-  await rememberSignalList(lead.id, lead.signals, "shapeASkipKeys", params.actionKey, true);
-  const sheet = await trySheetDualWrite({
-    action: "today_row_skipped",
-    leadId: lead.id,
-    channel: params.kind,
-    outcome: "skip",
-    actorId: user.id,
-    nextStep: null,
-    contactName: lead.contactName,
-    businessName: lead.businessName,
-    note: params.kind,
-  });
-  await writeAuditLog({
-    organizationId: user.organizationId,
-    actorId: user.id,
-    action: "today_row_skipped",
-    entityType: "lead",
-    entityId: lead.id,
-    after: { kind: params.kind, actionKey: params.actionKey, sheetDualWrite: sheet.todo },
-  });
-  revalidateWork();
-  return { ok: true as const };
 }
 
 /** Warmer reply / follow-up. Logs the touch and drops the card. Does not advance cadence. */

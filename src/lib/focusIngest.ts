@@ -1,12 +1,13 @@
 import { timingSafeEqual } from "crypto";
 import { z } from "zod";
+import { SKIP_REASONS, type SkipReason } from "@/lib/skipReason";
 import {
   mapPipelineGrid,
   type MappedPipelineRow,
   type PipelineOutcomeMode,
 } from "@/lib/pipelineToday";
 
-const TERMINAL = new Set(["done", "skipped", "follow_up"]);
+const TERMINAL = new Set(["done", "skipped", "follow_up", "snoozed"]);
 
 export const focusOutcomeSchema = z.enum(["done", "skip", "needs_follow_up"]);
 export type FocusOutcome = z.infer<typeof focusOutcomeSchema>;
@@ -52,6 +53,7 @@ export const focusIngestBodySchema = z.object({
 
 export const focusCompleteBodySchema = z.object({
   outcome: focusOutcomeSchema,
+  reason: z.enum(SKIP_REASONS).optional(),
   dueDate: z.string().max(40).optional(),
   note: z.string().max(500).optional(),
   completedAtPkt: z.string().max(40).optional(),
@@ -136,11 +138,13 @@ export type StoredFocusCard = {
   queueDate: string;
   status: string;
   ownerId: string;
+  /** A card created by skip routing. A same-day rebuild does not drop it. */
+  held?: boolean;
 };
 
 export type RebuildWrite = {
   cardId: string;
-  status: "open" | "done" | "skipped" | "follow_up";
+  status: "open" | "done" | "skipped" | "follow_up" | "snoozed";
   assigneeId: string;
   preserved: boolean;
 };
@@ -151,8 +155,8 @@ export type RebuildPlan =
 
 /**
  * Replace one day's open Focus cards. Assignees may differ per card.
- * Same payload twice yields the same statuses. Done / skipped / follow-up rows
- * stay unless force is set, and a finished card keeps its assignee.
+ * Same payload twice yields the same statuses. Done / skipped / follow-up /
+ * snoozed rows stay unless force is set, and a finished card keeps its assignee.
  * A card id that already lives on another day is 409.
  */
 export function planFocusRebuild(input: {
@@ -196,15 +200,15 @@ export function planFocusRebuild(input: {
   for (const row of input.existing) {
     if (row.queueDate !== input.datePkt) continue;
     if (incoming.has(row.externalKey) || row.status === "dropped") continue;
-    if (row.status === "open" || input.force) dropKeys.push(row.externalKey);
+    if (row.status === "snoozed" && !input.force) continue;
+    if ((row.status === "open" && row.held !== true) || input.force) dropKeys.push(row.externalKey);
   }
 
   return { ok: true, writes, dropKeys };
 }
 
 export function outcomeAllowed(mode: PipelineOutcomeMode, outcome: FocusOutcome): boolean {
-  if (outcome === "done") return true;
-  if (outcome === "skip") return mode === "done_skip" || mode === "done_skip_followup";
+  if (outcome === "done" || outcome === "skip") return true;
   return mode === "done_skip_followup" || mode === "done_followup";
 }
 
@@ -330,7 +334,15 @@ export function preflightRebuild(input: {
 
 export type CompletePreflight =
   | { ok: false; status: number; body: { error: string; issues?: Issue[] } }
-  | { ok: true; outcome: FocusOutcome; dueAt: Date | null; note: string | null; occurredAt: Date | null };
+  | {
+      ok: true;
+      outcome: FocusOutcome;
+      reason: SkipReason | null;
+      dueAt: Date | null;
+      returnStamp: string | null;
+      note: string | null;
+      occurredAt: Date | null;
+    };
 
 export function preflightComplete(input: {
   authorization: string | null;
@@ -346,13 +358,23 @@ export function preflightComplete(input: {
     return { ok: false, status: 422, body: { error: "Validation failed", issues: issuesOf(parsed.error) } };
   }
 
+  if (parsed.data.outcome === "skip" && !parsed.data.reason) {
+    return { ok: false, status: 422, body: { error: "skip needs a reason" } };
+  }
+  if (parsed.data.outcome !== "skip" && parsed.data.reason) {
+    return { ok: false, status: 422, body: { error: "reason is only used with skip" } };
+  }
+
   let dueAt: Date | null = null;
+  let returnStamp: string | null = null;
   if (parsed.data.dueDate !== undefined) {
-    if (parsed.data.outcome !== "needs_follow_up") {
-      return { ok: false, status: 422, body: { error: "dueDate is only used with needs_follow_up" } };
+    const skipReturn = parsed.data.outcome === "skip" && parsed.data.reason === "not_now";
+    if (parsed.data.outcome !== "needs_follow_up" && !skipReturn) {
+      return { ok: false, status: 422, body: { error: "dueDate is only used with needs_follow_up or skip not_now" } };
     }
     dueAt = parseDueDatePkt(parsed.data.dueDate);
     if (!dueAt) return { ok: false, status: 422, body: { error: "dueDate must be YYYY-MM-DD" } };
+    if (skipReturn) returnStamp = parsed.data.dueDate;
   }
 
   let occurredAt: Date | null = null;
@@ -364,7 +386,9 @@ export function preflightComplete(input: {
   return {
     ok: true,
     outcome: parsed.data.outcome,
+    reason: parsed.data.reason ?? null,
     dueAt,
+    returnStamp,
     note: parsed.data.note?.trim() || null,
     occurredAt,
   };

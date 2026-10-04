@@ -18,6 +18,7 @@ import {
   type TodayAction,
 } from "@/lib/todayCards";
 import type { ShapeCard } from "@/lib/shapeCard";
+import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
 import type { TouchOutcome } from "@prisma/client";
 import type { ScriptRating } from "@/lib/focusScripts";
 
@@ -83,7 +84,7 @@ export function ShapeASession({
   onEnd: () => void;
   onOpenCoach: () => void;
   onDone: (row: Row, script?: { variant: "a" | "b"; scriptId: string }) => void;
-  onSkip: (row: Row) => void;
+  onSkip: (row: Row, detail: SkipDetail) => void;
   onFollowUp: (row: Row) => void;
   onCallOutcome: (row: Row, outcome: TouchOutcome, note: string | null, script: { variant: "a" | "b"; scriptId: string }) => void;
   onLogReply: (row: Row) => void;
@@ -91,11 +92,13 @@ export function ShapeASession({
   const current = rows[0];
   const [copied, setCopied] = useState(false);
   const [callNote, setCallNote] = useState("");
+  const [askingSkip, setAskingSkip] = useState(false);
   const stack = focusSessionStacks();
 
   useEffect(() => {
     setCopied(false);
     setCallNote("");
+    setAskingSkip(false);
   }, [current?.action.key]);
 
   const emailParts = useMemo(() => {
@@ -143,7 +146,7 @@ export function ShapeASession({
     : "done_skip";
   const warmLabels = outcomeMode === "call" ? [] : outcomeLabels(outcomeMode);
   const showFollowUp = warmLabels.includes(OUTCOME_FOLLOW_UP);
-  const showSkip = outcomeMode === "call" || warmLabels.includes("Skip");
+  const showSkip = true;
 
   function copy() {
     const text = draftText;
@@ -156,9 +159,9 @@ export function ShapeASession({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!current) return;
+      if (!current || askingSkip) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
-      if (showSkip && e.key.toLowerCase() === "s") onSkip(current);
+      if (showSkip && e.key.toLowerCase() === "s") setAskingSkip(true);
       if (e.key.toLowerCase() === "c") copy();
       if (showFollowUp && e.key === "2") onFollowUp(current);
       if (actionOutcomeMode(current.action.kind) === "call") {
@@ -186,7 +189,7 @@ export function ShapeASession({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, callNote, emailParts, me, showFollowUp, showSkip, onFollowUp]);
+  }, [current, callNote, emailParts, me, showFollowUp, showSkip, onFollowUp, askingSkip]);
 
   const mins = sessionLengthSeconds === null ? null : Math.floor(secondsLeft / 60);
   const secs = sessionLengthSeconds === null ? null : String(secondsLeft % 60).padStart(2, "0");
@@ -501,7 +504,7 @@ export function ShapeASession({
               </button>
             )}
             {showSkip && (
-              <button type="button" onClick={() => onSkip(current)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
+              <button type="button" onClick={() => setAskingSkip(true)} className="border border-rule bg-panel font-semibold px-4 py-2 rounded-xl text-sm">
                 Skip
               </button>
             )}
@@ -511,6 +514,15 @@ export function ShapeASession({
           </div>
         </div>
       </div>
+      {askingSkip && current && (
+        <SkipReasonSheet
+          onCancel={() => setAskingSkip(false)}
+          onConfirm={(detail) => {
+            setAskingSkip(false);
+            onSkip(current, detail);
+          }}
+        />
+      )}
     </div>
   );
 }
