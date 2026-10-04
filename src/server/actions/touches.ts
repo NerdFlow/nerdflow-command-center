@@ -3,10 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { planNextCadenceStep, scheduleNextTouch, type WorkingHours } from "@/server/cadence";
+import { scheduleFocusCadenceAfterDone } from "@/server/focusCadenceSchedule";
 import { incrementDailyCount } from "@/server/targets";
 import { writeAuditLog } from "@/server/audit";
-import type { CampaignStrategy } from "@/server/strategy";
 import { normalizeCallerNote } from "@/lib/focusCallCard";
 import type { Channel, TouchOutcome } from "@prisma/client";
 
@@ -93,35 +92,13 @@ export async function logTouchOutcome(params: {
       return null;
     }
 
-    // sent / no_answer / voicemail / talked_not_now — advance the cadence, with an optional channel handoff.
-    // Skips cadence steps whose channel is not in the campaign's allowed channels (email-only never gets a call).
-    const strategy = lead.campaign.strategy as unknown as CampaignStrategy;
-    const planned = planNextCadenceStep({
-      strategy,
-      currentStep: step,
-      followUpChannel: params.followUpChannel,
+    // sent / no_answer / voicemail / talked_not_now — the team cadence picks the next card.
+    // It stays hidden until that Asia/Karachi day. Nothing here sends or opens a deal.
+    await scheduleFocusCadenceAfterDone({
+      organizationId: user.organizationId,
+      leadId: lead.id,
+      completedChannel: params.channel,
     });
-
-    if (planned.finished) {
-      await prisma.lead.update({ where: { id: lead.id }, data: { status: "finished", nextChannelOverride: null } });
-    } else {
-      const nextTouchAt = scheduleNextTouch({
-        occurredAt: now,
-        dayDelta: planned.dayDelta,
-        timezone: lead.owner.timezone,
-        workingHours: lead.owner.workingHours as unknown as WorkingHours,
-      });
-      // Per-lead only — never mutate the campaign's shared cadence, which every other lead reads too.
-      await prisma.lead.update({
-        where: { id: lead.id },
-        data: {
-          status: "in_cadence",
-          cadenceStep: planned.cadenceStep,
-          nextTouchAt,
-          nextChannelOverride: planned.nextChannelOverride,
-        },
-      });
-    }
     return null;
   }
 

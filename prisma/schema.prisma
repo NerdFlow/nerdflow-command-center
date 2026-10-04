@@ -264,6 +264,8 @@ model OrgSettings {
   leadDailyCapDefault  Int      @default(30) @map("lead_daily_cap_default")
   aiMonthlyBudgetUsd   Int      @default(150) @map("ai_monthly_budget_usd")
   workingHoursDefault  Json     @default("{\"start\":\"09:00\",\"end\":\"17:30\",\"days\":[1,2,3,4,5]}") @map("working_hours_default")
+  /// Team Focus sequence. Day 0 is the day the first card is queued. Offsets are Asia/Karachi calendar days.
+  focusCadence         Json     @default("[{\"day\":0,\"channel\":\"email\"},{\"day\":2,\"channel\":\"linkedin\"},{\"day\":4,\"channel\":\"email\"},{\"day\":10,\"channel\":\"email\"}]") @map("focus_cadence")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("org_settings")
@@ -579,6 +581,8 @@ model Lead {
   fitFlags           Json               @default("[]") @map("fit_flags")
   dedupeKey          String             @map("dedupe_key")
   cadenceStep        Int                @default(0) @map("cadence_step")
+  /// Asia/Karachi day the first Focus card was queued. Later steps count from here.
+  cadenceStartedOn   DateTime?          @map("cadence_started_on") @db.Date
   nextChannelOverride Channel?          @map("next_channel_override")
   nextTouchAt        DateTime?          @map("next_touch_at")
   approvedById       String?            @map("approved_by")

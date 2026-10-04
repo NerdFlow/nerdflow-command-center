@@ -1,3 +1,4 @@
+import { parseFocusCadence } from "@/lib/focusCadence";
 import { requireRole } from "@/server/auth";
 import { getOrgSettings } from "@/server/settings";
 import { SettingsClient } from "@/components/SettingsClient";
@@ -11,7 +12,7 @@ export default async function SettingsPage() {
   return (
     <div>
       <h1 className="text-[28px] tracking-tight mb-1.5">Settings</h1>
-      <p className="text-muted mb-6">Domain, assistant name, AI budget, default working hours, and products.</p>
+      <p className="text-muted mb-6">Domain, assistant name, Focus cadence, AI budget, default working hours, and products.</p>
       <div className="space-y-4">
         <SettingsClient
           settings={{
@@ -20,6 +21,7 @@ export default async function SettingsPage() {
             leadDailyCapDefault: settings.leadDailyCapDefault,
             aiMonthlyBudgetUsd: settings.aiMonthlyBudgetUsd,
             workingHoursDefault: settings.workingHoursDefault as { start: string; end: string },
+            focusCadence: parseFocusCadence(settings.focusCadence),
           }}
         />
         <ProductsPanel products={products} />

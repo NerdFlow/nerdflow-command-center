@@ -111,7 +111,7 @@ export async function upsertPipelineLead(
   ownerId: string,
   campaignId: string,
   row: MappedPipelineRow,
-  extra?: { dealCode?: string | null; source?: string },
+  extra?: { dealCode?: string | null; source?: string; queueDate?: string },
 ) {
   const dedupeKey = pipelinePersonKey(row.company, row.contactName);
   const existing = await db.lead.findFirst({ where: { organizationId, dedupeKey } });
@@ -148,6 +148,7 @@ export async function upsertPipelineLead(
         fitReasons: [row.intel],
         dedupeKey,
         cadenceStep: 0,
+        cadenceStartedOn: extra?.queueDate ? queueDateAsUtc(extra.queueDate) : null,
         nextTouchAt: null,
         approvedById: ownerId,
         isDemo: false,
@@ -163,7 +164,7 @@ export async function upsertPipelineLead(
       businessName: row.company || existing.businessName,
       status: keptStatus(existing.status),
       fitScore: existing.fitScore > 0 ? existing.fitScore : 0,
-      nextTouchAt: null,
+      ...(existing.cadenceStartedOn ? {} : { nextTouchAt: null, ...(extra?.queueDate ? { cadenceStartedOn: queueDateAsUtc(extra.queueDate) } : {}) }),
       approvedById: existing.approvedById ?? ownerId,
     },
   });
@@ -227,6 +228,7 @@ export async function applyPipelineTodaySync(input: {
     seen.add(card.cardId);
     const lead = await upsertPipelineLead(prisma, input.organizationId, card.leadOwnerId, campaign.id, card.row, {
       source: input.source,
+      queueDate,
     });
     const blocked = outreachBlockReason(lead) !== null;
     const previous = existingRows.find((row) => row.externalKey === card.cardId);

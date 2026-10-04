@@ -11,6 +11,7 @@ import { usablePhone } from "@/lib/importMap";
 import { planImportMerge } from "@/lib/phoneBackfill";
 import { extractSiteContact } from "@/server/leadgen/extract";
 import { scoreLead } from "@/server/leadgen/score";
+import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import { campaignStrategySchema } from "@/server/strategy";
 
 export async function approveLead(leadId: string) {
@@ -21,7 +22,7 @@ export async function approveLead(leadId: string) {
 
   const updated = await prisma.lead.update({
     where: { id: leadId },
-    data: { status: "queued", nextTouchAt: new Date(), approvedById: user.id },
+    data: { status: "queued", nextTouchAt: new Date(), cadenceStartedOn: queueDateAsUtc(pktDateStamp()), approvedById: user.id },
   });
   await incrementMetricCount(lead.ownerId, user.organizationId, "leads_verified");
   await writeAuditLog({
@@ -69,7 +70,7 @@ export async function bulkApproveAboveScore(threshold: number) {
   const leads = await prisma.lead.findMany({ where });
   await prisma.lead.updateMany({
     where: { id: { in: leads.map((l) => l.id) } },
-    data: { status: "queued", nextTouchAt: new Date(), approvedById: user.id },
+    data: { status: "queued", nextTouchAt: new Date(), cadenceStartedOn: queueDateAsUtc(pktDateStamp()), approvedById: user.id },
   });
   for (const lead of leads) {
     await incrementMetricCount(lead.ownerId, user.organizationId, "leads_verified");
@@ -348,6 +349,7 @@ export async function commitBulkImport(input: {
         dedupeKey,
         status: targetStatus,
         nextTouchAt: targetStatus === "queued" ? new Date() : null,
+        cadenceStartedOn: targetStatus === "queued" ? queueDateAsUtc(pktDateStamp()) : null,
       },
     });
     createdLeadIds.push(lead.id);

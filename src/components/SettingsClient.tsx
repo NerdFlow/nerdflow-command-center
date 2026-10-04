@@ -5,12 +5,21 @@ import { Btn, Panel } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import { updateOrgSettings } from "@/server/actions/admin";
 
+type CadenceChannel = "email" | "linkedin" | "call";
+
 type Settings = {
   allowedEmailDomain: string;
   assistantName: string;
   leadDailyCapDefault: number;
   aiMonthlyBudgetUsd: number;
   workingHoursDefault: { start: string; end: string };
+  focusCadence: { day: number; channel: CadenceChannel }[];
+};
+
+const CHANNEL_LABEL: Record<CadenceChannel, string> = {
+  email: "Email",
+  linkedin: "LinkedIn",
+  call: "Call",
 };
 
 export function SettingsClient({ settings }: { settings: Settings }) {
@@ -50,6 +59,75 @@ export function SettingsClient({ settings }: { settings: Settings }) {
             <input type="time" className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1" value={form.workingHoursDefault.end} onChange={(e) => set("workingHoursDefault", { ...form.workingHoursDefault, end: e.target.value })} />
           </label>
         </div>
+      </Panel>
+
+      <Panel>
+        <p className="text-sm font-medium mb-1">Focus cadence</p>
+        <p className="text-sm text-muted mb-3">
+          One card at a time. The next step shows after the previous one is Done, on that day in Asia/Karachi. Day 0 is the day the first card is queued.
+        </p>
+        <div className="space-y-2">
+          {form.focusCadence.map((step, index) => (
+            <div key={`${step.channel}-${index}`} className="grid grid-cols-[5rem_1fr_auto] gap-2 items-end">
+              <label className="text-sm">
+                Day
+                <input
+                  type="number"
+                  min={0}
+                  max={365}
+                  className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1"
+                  value={step.day}
+                  onChange={(e) => {
+                    const day = Number(e.target.value);
+                    set(
+                      "focusCadence",
+                      form.focusCadence.map((item, itemIndex) => (itemIndex === index ? { ...item, day: Number.isFinite(day) ? day : 0 } : item)),
+                    );
+                  }}
+                />
+              </label>
+              <label className="text-sm">
+                Channel
+                <select
+                  className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1"
+                  value={step.channel}
+                  onChange={(e) => {
+                    const channel = e.target.value as CadenceChannel;
+                    set(
+                      "focusCadence",
+                      form.focusCadence.map((item, itemIndex) => (itemIndex === index ? { ...item, channel } : item)),
+                    );
+                  }}
+                >
+                  {(Object.keys(CHANNEL_LABEL) as CadenceChannel[]).map((channel) => (
+                    <option key={channel} value={channel}>
+                      {CHANNEL_LABEL[channel]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="text-sm text-muted px-2 py-2 disabled:opacity-40"
+                disabled={form.focusCadence.length <= 1}
+                onClick={() => set("focusCadence", form.focusCadence.filter((_, itemIndex) => itemIndex !== index))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="text-sm text-accent font-medium mt-3"
+          disabled={form.focusCadence.length >= 12}
+          onClick={() => {
+            const last = form.focusCadence[form.focusCadence.length - 1];
+            set("focusCadence", [...form.focusCadence, { day: (last?.day ?? 0) + 1, channel: "email" }]);
+          }}
+        >
+          Add step
+        </button>
       </Panel>
 
       <Panel>

@@ -244,16 +244,38 @@ export function actionFromPipeline(leadId: string, view: PipelineCardView): Toda
   };
 }
 
-/** Pipeline rows are the card. Cadence expansion is only for leads that are not a Today-tab row. */
+/** One due cadence step. Replies stay. No second channel and no future step. */
+function actionsForDueChannel(lead: TodayShapeLead, channel: Channel, allowedChannels: Channel[]): TodayAction[] {
+  const actions: TodayAction[] = [];
+  const push = (kind: TodayActionKind, actionChannel: Channel, replyId?: string | null) => {
+    actions.push({ key: todayActionKey(lead.id, kind, replyId), leadId: lead.id, kind, channel: actionChannel, replyId: replyId ?? null });
+  };
+  for (const reply of lead.openReplies) {
+    if (reply.channel === "call") continue;
+    if (!channelAllowed(allowedChannels, reply.channel) && !(reply.channel === "linkedin" && allowedChannels.includes("email"))) continue;
+    push("reply", reply.channel, reply.id);
+  }
+  if (!channelAllowed(allowedChannels, channel)) return actions;
+  if (channel === "email" && lead.email?.trim() && lead.signals?.emailInvalid !== true) push("send_email", "email");
+  if (channel === "linkedin") push("linkedin_request", "linkedin");
+  if (channel === "call" && leadHasPhone(lead.phone) && lead.callAllowedNow) push("call", "call");
+  if (channel === "instagram") push("instagram", "instagram");
+  return actions;
+}
+
+/** Pipeline rows are the card. A cadence lead shows only the step that is due. */
 export function projectTodayActions(input: {
   pipeline?: PipelineCardView | null;
   lead: TodayShapeLead;
   allowedChannels: Channel[];
   hideCall?: boolean;
+  dueChannel?: Channel | null;
 }): TodayAction[] {
   const actions = input.pipeline
     ? [actionFromPipeline(input.lead.id, input.pipeline)]
-    : expandShapeLead(input.lead, input.allowedChannels);
+    : input.dueChannel
+      ? actionsForDueChannel(input.lead, input.dueChannel, input.allowedChannels)
+      : expandShapeLead(input.lead, input.allowedChannels);
   const settled = new Set(followUpKeysFromSignals(input.lead.signals));
   const skipped = new Set(skipKeysFromSignals(input.lead.signals));
   const until = skipUntilFromSignals(input.lead.signals);

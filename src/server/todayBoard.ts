@@ -7,6 +7,7 @@ import type { CampaignStrategy } from "@/server/strategy";
 import type { CoachDirectoryLead, ShapeCard, ShapeReply } from "@/lib/shapeCard";
 import type { PipelineActionKind, PipelineCardView, PipelineChannel, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import { presentLeadName } from "@/lib/leadNames";
+import { queueLeadBlockedByPipeline } from "@/lib/focusCadence";
 import { outreachBlockReason, outreachStopped } from "@/lib/replyLog";
 import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import type { Channel, LeadSource, Prisma } from "@prisma/client";
@@ -145,13 +146,20 @@ export async function loadFocusBoard(
 
   // Open rows assigned to this rep, including ones queued on an earlier Asia/Karachi day.
   // A channel they no longer work stays off the board even if a stale row still names them.
+  const seenLeadChannel = new Set<string>();
   const pipelineRows = (
     await prisma.pipelineTodayRow.findMany({
       where: { ...visibleOpenPipelineWhere(organizationId, ownerId, queueDay), channel: { in: channels } },
       orderBy: [{ queueDate: "asc" }, { sheetRow: "asc" }],
       include: { lead: { include: { campaign: { include: { product: true } } } } },
     })
-  ).filter((row) => outreachBlockReason(row.lead) === null);
+  ).filter((row) => {
+    if (outreachBlockReason(row.lead) !== null) return false;
+    const key = `${row.leadId}:${row.channel}`;
+    if (seenLeadChannel.has(key)) return false;
+    seenLeadChannel.add(key);
+    return true;
+  });
   const pipelineLeadIds = [...new Set(pipelineRows.map((row) => row.leadId))];
   const pipelineTouches =
     pipelineLeadIds.length === 0
@@ -166,7 +174,10 @@ export async function loadFocusBoard(
     if (!lastTouchByLead.has(touch.leadId)) lastTouchByLead.set(touch.leadId, touch);
   }
 
-  const queue = (await getQueueForUser(ownerId, 50)).filter((item) => outreachBlockReason(item.lead) === null);
+  const openPipelineLeadIds = new Set(pipelineRows.map((row) => row.leadId));
+  const queue = (await getQueueForUser(ownerId, 50)).filter(
+    (item) => outreachBlockReason(item.lead) === null && !queueLeadBlockedByPipeline(item.lead.id, openPipelineLeadIds),
+  );
   const queueIds = queue.map((item) => item.lead.id);
 
   const [sentRows, replies, directory] = await Promise.all([
@@ -213,7 +224,7 @@ export async function loadFocusBoard(
 
   const cards: ShapeCard[] = [
     ...pipelineRows.map((row) => pipelineCard(row, formatLastTouch(lastTouchByLead.get(row.leadId) ?? null))),
-    ...queue.map(({ lead, campaign, label }) => ({
+    ...queue.map(({ lead, campaign, label, dueChannel }) => ({
       lead: {
         id: lead.id,
         businessName: shownName(lead.businessName),
@@ -246,6 +257,7 @@ export async function loadFocusBoard(
       label,
       linkedinRequestSent: linkedinSent.has(lead.id),
       openReplies: repliesByLead.get(lead.id) ?? [],
+      dueChannel,
     })),
   ];
 

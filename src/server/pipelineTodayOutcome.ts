@@ -4,6 +4,7 @@ import { prisma } from "@/server/db";
 import { incrementDailyCount } from "@/server/targets";
 import { trySheetDualWrite } from "@/server/sheetDualWrite";
 import { dateStampFromDb, sheetRowForWriteback } from "@/lib/pipelineToday";
+import { scheduleFocusCadenceAfterDone } from "@/server/focusCadenceSchedule";
 import { outcomeStatus, type FocusOutcome } from "@/lib/focusIngest";
 
 export class FocusIngestError extends Error {
@@ -115,6 +116,19 @@ export async function commitPipelineTodayOutcome(input: {
   });
 
   if (touchId.idempotent) return { touchId: null, idempotent: true, status };
+
+  if (
+    input.outcome === "done" &&
+    (row.kind === "send_email" || row.kind === "linkedin_request" || row.kind === "call" || row.kind === "follow_up") &&
+    (row.channel === "email" || row.channel === "linkedin" || row.channel === "call")
+  ) {
+    await scheduleFocusCadenceAfterDone({
+      organizationId: input.organizationId,
+      leadId: row.leadId,
+      completedChannel: row.channel,
+      anchorHint: dateStampFromDb(row.queueDate),
+    });
+  }
 
   if (input.outcome === "done" && row.kind !== "next_action") {
     try {

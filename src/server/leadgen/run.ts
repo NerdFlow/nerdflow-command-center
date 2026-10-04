@@ -3,6 +3,7 @@ import { writeAuditLog } from "@/server/audit";
 import { computeDedupeKey, ruleScore } from "@/server/leads";
 import { AiUnavailableError } from "@/server/ai/client";
 import { leadBusinessName } from "@/lib/leadNames";
+import { pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import { extractSiteContact } from "@/server/leadgen/extract";
 import { scoreLead } from "@/server/leadgen/score";
 import { campaignStrategySchema } from "@/server/strategy";
@@ -143,6 +144,7 @@ export async function executeLeadDiscoveryRun(params: {
           // Owner's queue (Focus) — no separate Lead Inbox approval step.
           status: "queued",
           nextTouchAt: new Date(),
+          cadenceStartedOn: queueDateAsUtc(pktDateStamp()),
         },
       });
       created += 1;
