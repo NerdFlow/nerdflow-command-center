@@ -127,26 +127,76 @@ const focusCadenceSchema = z
   .min(1)
   .max(12);
 
-export async function updateOrgSettings(patch: Partial<{
-  allowedEmailDomain: string;
-  assistantName: string;
-  leadDailyCapDefault: number;
-  aiMonthlyBudgetUsd: number;
-  workingHoursDefault: { start: string; end: string; days: number[] };
-  focusCadence: { day: number; channel: "email" | "linkedin" | "call" }[];
-}>) {
+const mailboxSignatureSchema = z.record(
+  z.string().trim().email().max(200),
+  z.object({
+    name: z.string().max(120),
+    signature: z.string().max(4000),
+  }),
+);
+
+const settingsPatchSchema = z.object({
+  allowedEmailDomain: z.string().trim().min(1).max(200).optional(),
+  assistantName: z.string().trim().min(1).max(80).optional(),
+  leadDailyCapDefault: z.number().int().min(1).max(500).optional(),
+  aiMonthlyBudgetUsd: z.number().int().min(0).max(100000).optional(),
+  workingHoursDefault: z
+    .object({
+      start: z.string().min(1).max(8),
+      end: z.string().min(1).max(8),
+      days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    })
+    .optional(),
+  focusCadence: focusCadenceSchema.optional(),
+  outreachDraftKillSwitch: z.boolean().optional(),
+  outreachDraftDailyCap: z.number().int().min(1).max(500).optional(),
+  postalAddress: z.string().max(800).nullable().optional(),
+  optOutLine: z.string().max(500).nullable().optional(),
+  mailboxSignatures: mailboxSignatureSchema.optional(),
+});
+
+export async function updateOrgSettings(patch: z.input<typeof settingsPatchSchema>) {
   const lead = await requireRole(["lead"]);
-  const focusCadence = patch.focusCadence ? focusCadenceSchema.parse(patch.focusCadence).sort((a, b) => a.day - b.day) : undefined;
+  const parsed = settingsPatchSchema.parse(patch);
+  const focusCadence = parsed.focusCadence ? [...parsed.focusCadence].sort((a, b) => a.day - b.day) : undefined;
+  const postalAddress = parsed.postalAddress === undefined ? undefined : parsed.postalAddress?.trim() || null;
+  const optOutLine = parsed.optOutLine === undefined ? undefined : parsed.optOutLine?.trim() || null;
+  const mailboxSignatures =
+    parsed.mailboxSignatures === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(parsed.mailboxSignatures).map(([email, sig]) => [
+            email.toLowerCase(),
+            { name: sig.name.trim(), signature: sig.signature.trim() },
+          ]),
+        );
+  const data = {
+    ...(parsed.allowedEmailDomain !== undefined ? { allowedEmailDomain: parsed.allowedEmailDomain.toLowerCase() } : {}),
+    ...(parsed.assistantName !== undefined ? { assistantName: parsed.assistantName } : {}),
+    ...(parsed.leadDailyCapDefault !== undefined ? { leadDailyCapDefault: parsed.leadDailyCapDefault } : {}),
+    ...(parsed.aiMonthlyBudgetUsd !== undefined ? { aiMonthlyBudgetUsd: parsed.aiMonthlyBudgetUsd } : {}),
+    ...(parsed.workingHoursDefault !== undefined ? { workingHoursDefault: parsed.workingHoursDefault } : {}),
+    ...(focusCadence ? { focusCadence } : {}),
+    ...(parsed.outreachDraftKillSwitch !== undefined ? { outreachDraftKillSwitch: parsed.outreachDraftKillSwitch } : {}),
+    ...(parsed.outreachDraftDailyCap !== undefined ? { outreachDraftDailyCap: parsed.outreachDraftDailyCap } : {}),
+    ...(postalAddress !== undefined ? { postalAddress } : {}),
+    ...(optOutLine !== undefined ? { optOutLine } : {}),
+    ...(mailboxSignatures !== undefined ? { mailboxSignatures } : {}),
+  };
   await prisma.orgSettings.update({
     where: { organizationId: lead.organizationId },
-    data: { ...patch, ...(focusCadence ? { focusCadence } : {}) },
+    data,
   });
   await writeAuditLog({
     organizationId: lead.organizationId,
     actorId: lead.id,
     action: "org_settings_updated",
     entityType: "org_settings",
-    after: patch,
+    after: {
+      ...data,
+      mailboxSignatures: mailboxSignatures ? Object.keys(mailboxSignatures) : undefined,
+    },
   });
   revalidatePath("/settings");
+  revalidatePath("/focus");
 }

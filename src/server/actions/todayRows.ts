@@ -12,6 +12,10 @@ import { logTouchOutcome } from "@/server/actions/touches";
 import { trySheetDualWrite } from "@/server/sheetDualWrite";
 import type { CampaignStrategy } from "@/server/strategy";
 import { followUpKeysFromSignals, skipKeysFromSignals, todayActionKey, type TodayActionKind } from "@/lib/todayCards";
+import { resolveFocusOpener } from "@/lib/focusScripts";
+import { firstHttpUrl } from "@/lib/outreachChecklist";
+import { splitEmailDraft } from "@/server/cadence";
+import { assertOutreachSendable, OutreachSendBlocked, sendingMailbox } from "@/server/outreach/sendGate";
 
 const doneSchema = z.object({
   leadId: z.string().min(1),
@@ -21,6 +25,9 @@ const doneSchema = z.object({
   scriptId: z.string().max(80).optional(),
   /** True only when this LinkedIn row is the cadence step. A cold pair beside an email row must not advance. */
   advanceCadence: z.boolean().optional(),
+  subject: z.string().max(200).optional(),
+  body: z.string().max(8000).optional(),
+  openerSourceUrl: z.string().max(2000).nullable().optional(),
 });
 
 const followSchema = z.object({
@@ -40,7 +47,7 @@ function revalidateWork() {
 async function loadLead(leadId: string, organizationId: string) {
   const lead = await prisma.lead.findFirst({
     where: { id: leadId, organizationId },
-    include: { campaign: true, owner: true },
+    include: { campaign: { include: { product: true } }, owner: true },
   });
   if (!lead) throw new Error("Lead not found");
   return lead;
@@ -150,6 +157,72 @@ export async function completeTodayRow(raw: z.input<typeof doneSchema>) {
   let touchId = "";
   let dealId: string | null = null;
   let channel: Channel = "email";
+
+  if (params.kind === "send_email" || params.kind === "reply") {
+    const actionKey = todayActionKey(lead.id, params.kind as TodayActionKind, params.replyId);
+    const existing = await prisma.outreachDraft.findUnique({
+      where: { organizationId_actionKey: { organizationId: user.organizationId, actionKey } },
+    });
+    const reply = params.kind === "reply" && params.replyId
+      ? await prisma.reply.findFirst({ where: { id: params.replyId, leadId: lead.id, organizationId: user.organizationId } })
+      : null;
+    const template = params.kind === "send_email"
+      ? splitEmailDraft(
+          resolveFocusOpener({
+            channel: "email",
+            leadId: lead.id,
+            productName: lead.campaign.product?.name ?? "ReceptAI",
+            strategy: strategy,
+            values: {
+              name: lead.contactName?.trim().split(/\s+/)[0] || "there",
+              biz: lead.businessName,
+              city: lead.city || "",
+              me: user.fullName,
+              product: lead.campaign.product?.name ?? "",
+              role: lead.contactRole ?? undefined,
+            },
+          }).text,
+        )
+      : { subject: "", body: reply?.responseDraft ?? "" };
+    const subject = params.subject ?? existing?.subject ?? template.subject;
+    const body = params.body ?? existing?.body ?? template.body;
+    const sendChannel = params.kind === "reply" && reply ? reply.channel : "email";
+    const openerSourceUrl = firstHttpUrl(params.openerSourceUrl, existing?.openerSourceUrl, lead.sourceUrl);
+    if ((params.subject !== undefined || params.body !== undefined) && (sendChannel === "email" || sendChannel === "linkedin")) {
+      await prisma.outreachDraft.upsert({
+        where: { organizationId_actionKey: { organizationId: user.organizationId, actionKey } },
+        create: {
+          organizationId: user.organizationId,
+          userId: user.id,
+          leadId: lead.id,
+          actionKey,
+          channel: sendChannel,
+          subject,
+          body,
+          openerSourceUrl,
+          source: "manual",
+        },
+        update: { subject, body, openerSourceUrl, source: "manual" },
+      });
+    }
+    try {
+      await assertOutreachSendable({
+        organizationId: user.organizationId,
+        mailbox: sendingMailbox({ channel: sendChannel, pipeline: false, repEmail: user.email }),
+        channel: sendChannel,
+        kind: params.kind,
+        cadenceStep: lead.cadenceStep,
+        subject,
+        body,
+        companyName: lead.businessName,
+        openerSourceUrl,
+        lead,
+      });
+    } catch (err) {
+      if (err instanceof OutreachSendBlocked) throw new Error(err.message);
+      throw err;
+    }
+  }
 
   if (params.kind === "reply") {
     const done = await completeReply(user.organizationId, user.id, lead, params.replyId);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { splitEmailDraft } from "@/server/cadence";
 import { buildCallCard, focusSessionStacks, normalizeCallerNote, websiteLabel, whoLine, whyThisLead } from "@/lib/focusCallCard";
 import { resolveFocusOpener } from "@/lib/focusScripts";
@@ -19,8 +19,31 @@ import {
 } from "@/lib/todayCards";
 import type { ShapeCard } from "@/lib/shapeCard";
 import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
+import { OutreachDraftPanel, reviewOutreachCopy } from "@/components/OutreachDraftPanel";
+import { checklistApplies, firstHttpUrl } from "@/lib/outreachChecklist";
+import { sendingMailbox, type MailboxSignatureMap } from "@/lib/mailboxSignature";
+import type { ChecklistCatalog } from "@/lib/outreachChecklist";
 import type { TouchOutcome } from "@prisma/client";
 import type { ScriptRating } from "@/lib/focusScripts";
+
+export type OutreachDraftCopy = {
+  subject: string;
+  body: string;
+  regenerateCount: number;
+  openerSourceUrl: string | null;
+};
+
+export type OutreachSessionProps = {
+  catalog: ChecklistCatalog;
+  signatures: MailboxSignatureMap;
+  postalAddress: string | null;
+  optOutLine: string | null;
+  killSwitch: boolean;
+  dailyCap: number;
+  usedToday: number;
+  repEmail: string;
+  drafts: Record<string, OutreachDraftCopy>;
+};
 
 type Row = { action: TodayAction; card: ShapeCard };
 
@@ -64,6 +87,8 @@ export function ShapeASession({
   onFollowUp,
   onCallOutcome,
   onLogReply,
+  outreach,
+  onGenerateDraft,
 }: {
   rows: Row[];
   me: string;
@@ -83,16 +108,25 @@ export function ShapeASession({
   onDismissRating: () => void;
   onEnd: () => void;
   onOpenCoach: () => void;
-  onDone: (row: Row, script?: { variant: "a" | "b"; scriptId: string }) => void;
+  onDone: (row: Row, script?: { variant: "a" | "b"; scriptId: string }, copy?: { subject: string; body: string; openerSourceUrl: string | null }) => void;
   onSkip: (row: Row, detail: SkipDetail) => void;
   onFollowUp: (row: Row) => void;
   onCallOutcome: (row: Row, outcome: TouchOutcome, note: string | null, script: { variant: "a" | "b"; scriptId: string }) => void;
   onLogReply: (row: Row) => void;
+  outreach: OutreachSessionProps;
+  onGenerateDraft: (row: Row, mode: "generate" | "regenerate") => Promise<OutreachDraftCopy | null>;
 }) {
   const current = rows[0];
   const [copied, setCopied] = useState(false);
   const [callNote, setCallNote] = useState("");
   const [askingSkip, setAskingSkip] = useState(false);
+  const [draftSubject, setDraftSubject] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [openerUrl, setOpenerUrl] = useState("");
+  const [regenCount, setRegenCount] = useState(0);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const copyRef = useRef({ body: "", subject: "", opener: "", blocked: false });
   const stack = focusSessionStacks();
 
   useEffect(() => {
@@ -130,17 +164,47 @@ export function ShapeASession({
   const reply = current?.action.replyId
     ? current.card.openReplies.find((item) => item.id === current.action.replyId) ?? null
     : null;
-  const draftText = pipeline
-    ? pipeline.blankMessage
-      ? ""
-      : pipeline.message.trim()
-    : current?.action.kind === "reply"
-      ? reply?.responseDraft?.trim() || ""
-      : current?.action.kind === "send_email"
-        ? emailParts?.body || ""
-        : current?.action.kind === "instagram" || current?.action.kind === "contact_form"
+  const messageApplies =
+    !!current &&
+    checklistApplies({
+      channel: current.action.channel,
+      kind: current.action.kind,
+      blankMessage: Boolean(pipeline?.blankMessage || pipeline?.connectNoNote),
+    });
+
+  useEffect(() => {
+    if (!current) return;
+    const saved = outreach.drafts[current.action.key];
+    const baseSubject = saved?.subject || pipeline?.mailtoSubject || emailParts?.subject?.replace(/^Subject:\s*/i, "") || "";
+    const baseBody =
+      saved?.body ||
+      (pipeline ? (pipeline.blankMessage ? "" : pipeline.message) : "") ||
+      (current.action.kind === "reply" ? reply?.responseDraft || "" : "") ||
+      emailParts?.body ||
+      "";
+    setDraftSubject(baseSubject);
+    setDraftBody(baseBody);
+    setOpenerUrl(saved?.openerSourceUrl || firstHttpUrl(current.card.lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl) || "");
+    setRegenCount(saved?.regenerateCount ?? 0);
+    setDraftSaved(Boolean(saved));
+    setDraftBusy(false);
+    // Reset only when the card changes. Typing must not re-seed the fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.action.key]);
+
+  const draftText = messageApplies
+    ? draftBody
+    : pipeline
+      ? pipeline.blankMessage
+        ? ""
+        : pipeline.message.trim()
+      : current?.action.kind === "reply"
+        ? reply?.responseDraft?.trim() || ""
+        : current?.action.kind === "send_email"
           ? emailParts?.body || ""
-          : "";
+          : current?.action.kind === "instagram" || current?.action.kind === "contact_form"
+            ? emailParts?.body || ""
+            : "";
   const outcomeMode = current
     ? pipeline?.outcomeMode ?? (actionOutcomeMode(current.action.kind) === "call" ? "call" : actionOutcomeMode(current.action.kind))
     : "done_skip";
@@ -149,7 +213,8 @@ export function ShapeASession({
   const showSkip = true;
 
   function copy() {
-    const text = draftText;
+    if (copyRef.current.blocked) return;
+    const text = copyRef.current.body;
     if (!text || (current && actionShowsBlankMessage(current.action.kind))) return;
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -162,7 +227,7 @@ export function ShapeASession({
       if (!current || askingSkip) return;
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
       if (showSkip && e.key.toLowerCase() === "s") setAskingSkip(true);
-      if (e.key.toLowerCase() === "c") copy();
+      if (e.key.toLowerCase() === "c" && !copyRef.current.blocked) copy();
       if (showFollowUp && e.key === "2") onFollowUp(current);
       if (actionOutcomeMode(current.action.kind) === "call") {
         const match = CALL_OUTCOMES.find((item) => item.key === e.key);
@@ -184,7 +249,13 @@ export function ShapeASession({
         }
         return;
       }
-      if (e.key === "1") onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined);
+      if (e.key === "1" && !copyRef.current.blocked) {
+        onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined, {
+          subject: copyRef.current.subject,
+          body: copyRef.current.body,
+          openerSourceUrl: copyRef.current.opener || null,
+        });
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -271,18 +342,48 @@ export function ShapeASession({
       ? pipeline.linkUrl
       : null
     : contactFormUrl(lead.signals);
-  const mailtoHref = pipeline
-    ? pipelineMailtoHref(pipeline)
-    : kind === "send_email" && lead.email && emailParts
-      ? mailtoUrl(lead.email, emailParts.subject, emailParts.body)
-      : kind === "reply" && current.action.channel === "email" && lead.email && reply?.responseDraft
-        ? mailtoUrl(lead.email, `Re: ${lead.businessName}`, reply.responseDraft)
-        : null;
+  const outreachChannel = current.action.channel === "linkedin" ? "linkedin" : "email";
+  const outreachReview =
+    messageApplies && (current.action.channel === "email" || current.action.channel === "linkedin")
+      ? reviewOutreachCopy({
+          channel: outreachChannel,
+          kind,
+          cadenceStep: lead.cadenceStep,
+          subject: draftSubject,
+          body: draftBody,
+          companyName: lead.businessName,
+          openerSourceUrl: openerUrl.trim() || null,
+          dnc: false,
+          catalog: outreach.catalog,
+          signatures: outreach.signatures,
+          mailbox: sendingMailbox({ channel: outreachChannel, pipeline: Boolean(pipeline), repEmail: outreach.repEmail }),
+          postalAddress: outreach.postalAddress,
+          optOutLine: outreach.optOutLine,
+        })
+      : null;
+  const sendBlocked = Boolean(outreachReview && outreachReview.blocks.length > 0);
+  copyRef.current = {
+    body: messageApplies ? draftBody : draftText,
+    subject: messageApplies ? draftSubject : emailParts?.subject || pipeline?.mailtoSubject || "",
+    opener: openerUrl.trim(),
+    blocked: sendBlocked,
+  };
+  const mailtoHref = sendBlocked
+    ? null
+    : messageApplies && current.action.channel === "email" && lead.email
+      ? mailtoUrl(lead.email, draftSubject, draftBody)
+      : pipeline
+        ? pipelineMailtoHref(pipeline)
+        : kind === "send_email" && lead.email && emailParts
+          ? mailtoUrl(lead.email, emailParts.subject, emailParts.body)
+          : kind === "reply" && current.action.channel === "email" && lead.email && reply?.responseDraft
+            ? mailtoUrl(lead.email, `Re: ${lead.businessName}`, reply.responseDraft)
+            : null;
   const wantsLinkedIn =
     kind === "linkedin_request" ||
     (kind === "follow_up" && pipeline?.linkKind === "linkedin_profile") ||
     (kind === "reply" && (pipeline ? pipeline.linkKind === "linkedin_profile" : current.action.channel === "linkedin"));
-  const linkedinHref = wantsLinkedIn ? pipeline?.linkUrl || linkedinOpenUrl(lead) : null;
+  const linkedinHref = sendBlocked && messageApplies ? null : wantsLinkedIn ? pipeline?.linkUrl || linkedinOpenUrl(lead) : null;
   const callModel =
     kind === "call"
       ? buildCallCard({
@@ -362,7 +463,7 @@ export function ShapeASession({
           {kind !== "call" && kind !== "linkedin_request" && (
             <div className="flex flex-wrap items-center gap-2">
               {draftText && (
-                <button type="button" onClick={copy} className="inline-flex items-center justify-center border border-rule bg-panel font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40">
+                <button type="button" onClick={copy} disabled={sendBlocked} className="inline-flex items-center justify-center border border-rule bg-panel font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40 disabled:opacity-40">
                   {copied ? "Copied" : pipeline ? "Copy" : "Copy draft"}
                 </button>
               )}
@@ -409,7 +510,51 @@ export function ShapeASession({
             </div>
           )}
 
-          {pipeline && kind !== "linkedin_request" && (
+          {messageApplies && outreachReview && (current.action.channel === "email" || current.action.channel === "linkedin") && (
+            <OutreachDraftPanel
+              channel={outreachChannel}
+              subject={draftSubject}
+              body={draftBody}
+              openerSourceUrl={openerUrl}
+              review={outreachReview}
+              saved={draftSaved}
+              regenerateCount={regenCount}
+              killSwitch={outreach.killSwitch}
+              capReached={outreach.usedToday >= outreach.dailyCap}
+              busy={draftBusy}
+              onSubject={setDraftSubject}
+              onBody={setDraftBody}
+              onOpener={setOpenerUrl}
+              onGenerate={() => {
+                setDraftBusy(true);
+                void onGenerateDraft(current, "generate")
+                  .then((draft) => {
+                    if (!draft) return;
+                    setDraftSubject(draft.subject);
+                    setDraftBody(draft.body);
+                    setOpenerUrl(draft.openerSourceUrl || openerUrl);
+                    setRegenCount(draft.regenerateCount);
+                    setDraftSaved(true);
+                  })
+                  .finally(() => setDraftBusy(false));
+              }}
+              onRegenerate={() => {
+                setDraftBusy(true);
+                void onGenerateDraft(current, "regenerate")
+                  .then((draft) => {
+                    if (!draft) return;
+                    setDraftSubject(draft.subject);
+                    setDraftBody(draft.body);
+                    setOpenerUrl(draft.openerSourceUrl || openerUrl);
+                    setRegenCount(draft.regenerateCount);
+                    setDraftSaved(true);
+                  })
+                  .finally(() => setDraftBusy(false));
+              }}
+            />
+          )}
+
+          {pipeline && kind !== "linkedin_request" && !messageApplies && (
             <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
               <p className="section-label mb-0 text-accent">Message</p>
               {pipeline.mailtoSubject && <p className="text-sm font-semibold m-0">{pipeline.mailtoSubject}</p>}
@@ -417,7 +562,7 @@ export function ShapeASession({
             </div>
           )}
 
-          {!pipeline && kind === "send_email" && emailParts && (
+          {!pipeline && kind === "send_email" && emailParts && !messageApplies && (
             <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
               <p className="section-label mb-0 text-accent">Opener</p>
               {emailParts.subject && <p className="text-sm font-semibold m-0">{emailParts.subject.replace(/^Subject:\s*/i, "")}</p>}
@@ -425,7 +570,7 @@ export function ShapeASession({
             </div>
           )}
 
-          {!pipeline && kind === "reply" && (
+          {!pipeline && kind === "reply" && !messageApplies && (
             <div className="bg-cold-soft border border-accent/15 rounded-2xl px-5 py-4 space-y-2">
               <p className="section-label mb-0 text-accent">Message</p>
               <p className="text-base leading-relaxed m-0 whitespace-pre-wrap">{reply?.responseDraft?.trim() || "No draft stored. Paste your own in LinkedIn. Nothing is sent from here."}</p>
@@ -492,8 +637,15 @@ export function ShapeASession({
             ) : (
               <button
                 type="button"
-                onClick={() => onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined)}
-                className="bg-accent text-on-accent font-semibold px-4 py-2 rounded-xl text-sm"
+                disabled={sendBlocked}
+                onClick={() =>
+                  onDone(current, emailParts ? { variant: emailParts.variant, scriptId: emailParts.scriptId } : undefined, {
+                    subject: draftSubject,
+                    body: draftBody,
+                    openerSourceUrl: openerUrl.trim() || null,
+                  })
+                }
+                className="bg-accent text-on-accent font-semibold px-4 py-2 rounded-xl text-sm disabled:opacity-40"
               >
                 Done
               </button>

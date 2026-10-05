@@ -6,6 +6,9 @@ import { logTouchOutcome, rateTouchScript } from "@/server/actions/touches";
 import { completeTodayRow, followUpTodayRow } from "@/server/actions/todayRows";
 import { skipFocusCard } from "@/server/actions/skipFocus";
 import { recordPipelineOutcome } from "@/server/actions/pipelineToday";
+import { generateOutreachDraft, generateOutreachDraftsForToday } from "@/server/actions/outreachDraft";
+import { checklistApplies } from "@/lib/outreachChecklist";
+import type { OutreachDraftCopy, OutreachSessionProps } from "@/components/ShapeASession";
 import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
 import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
@@ -132,6 +135,8 @@ export function FocusClient({
   coachLeads = [],
   assistantName = "Flow",
   sync = null,
+  outreach,
+  repEmail,
 }: {
   initialCards: Card[];
   me: string;
@@ -141,6 +146,8 @@ export function FocusClient({
   coachLeads?: CoachDirectoryLead[];
   assistantName?: string;
   sync?: FocusSyncState | null;
+  outreach: Omit<OutreachSessionProps, "drafts" | "usedToday" | "repEmail"> & { drafts: Record<string, OutreachDraftCopy>; usedToday: number; draftStamp: string };
+  repEmail: string;
 }) {
   const router = useRouter();
   const worksCall = allowedChannels.includes("call");
@@ -173,6 +180,15 @@ export function FocusClient({
   const [sessionTotal, setSessionTotal] = useState(0);
   const [businessHoursOnly, setBusinessHoursOnly] = useState(false);
   const [callSkipOpen, setCallSkipOpen] = useState(false);
+  const [drafts, setDrafts] = useState(outreach.drafts);
+  const [usedToday, setUsedToday] = useState(outreach.usedToday);
+  const [batching, setBatching] = useState(false);
+  const [batchNote, setBatchNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDrafts(outreach.drafts);
+    setUsedToday(outreach.usedToday);
+  }, [outreach.draftStamp]);
 
   useEffect(() => {
     setCards(initialCards.filter((card) => cardStaysOnBoard(card, allowedChannels, worksCall)));
@@ -318,6 +334,61 @@ export function FocusClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started, channelFilter, current, outcomes, draftText, callNote, opener, channel, callSkipOpen]);
 
+  async function onGenerateDraft(row: { action: TodayAction; card: Card }, mode: "generate" | "regenerate") {
+    const channel = row.action.channel === "linkedin" ? "linkedin" : "email";
+    try {
+      const result = await generateOutreachDraft({
+        actionKey: row.action.key,
+        leadId: row.card.lead.id,
+        pipelineRowId: row.action.pipelineRowId ?? null,
+        channel,
+        kind: row.action.kind,
+        mode,
+      });
+      setDrafts((prev) => ({ ...prev, [row.action.key]: result.draft }));
+      setUsedToday(result.usedToday);
+      return result.draft;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't write that draft.");
+      return null;
+    }
+  }
+
+  async function generateToday() {
+    const waiting = shapeRows.filter(
+      (row) =>
+        checklistApplies({
+          channel: row.action.channel,
+          kind: row.action.kind,
+          blankMessage: Boolean(row.card.pipeline?.blankMessage || row.card.pipeline?.connectNoNote),
+        }) && !drafts[row.action.key],
+    );
+    if (waiting.length === 0) {
+      setBatchNote("No email or LinkedIn cards are waiting for a draft.");
+      return;
+    }
+    setBatching(true);
+    setBatchNote(null);
+    try {
+      const result = await generateOutreachDraftsForToday(
+        waiting.map((row) => ({
+          actionKey: row.action.key,
+          leadId: row.card.lead.id,
+          pipelineRowId: row.action.pipelineRowId ?? null,
+          channel: row.action.channel === "linkedin" ? "linkedin" : "email",
+          kind: row.action.kind,
+          mode: "generate" as const,
+        })),
+      );
+      setBatchNote(result.message);
+      router.refresh();
+    } catch (err) {
+      setBatchNote(err instanceof Error ? err.message : "Couldn't generate drafts.");
+    } finally {
+      setBatching(false);
+    }
+  }
+
   function startSession(ch: Channel | "all") {
     if (ch !== "all") setChannelFilter(ch);
     const total =
@@ -340,7 +411,11 @@ export function FocusClient({
     return shapeRows.filter((row) => actionVisible(row.action, filter));
   }
 
-  function settlePipeline(row: { action: TodayAction; card: Card }, outcome: "done" | "skip" | "needs_follow_up") {
+  function settlePipeline(
+    row: { action: TodayAction; card: Card },
+    outcome: "done" | "skip" | "needs_follow_up",
+    copy?: { subject: string; body: string; openerSourceUrl: string | null },
+  ) {
     const rowId = row.action.pipelineRowId;
     if (!rowId) return;
     const key = row.action.key;
@@ -349,7 +424,13 @@ export function FocusClient({
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     if (outcome !== "skip") setTouchesLogged((n) => n + 1);
-    void recordPipelineOutcome({ rowId, outcome })
+    void recordPipelineOutcome({
+      rowId,
+      outcome,
+      subject: copy?.subject,
+      body: copy?.body,
+      openerSourceUrl: copy?.openerSourceUrl,
+    })
       .then((res) => {
         if (res.touchId && outcome === "done" && row.action.kind === "send_email") {
           setPendingRating({ touchId: res.touchId, businessName: row.card.lead.businessName });
@@ -419,9 +500,13 @@ export function FocusClient({
       });
   }
 
-  function handleShapeDone(row: { action: TodayAction; card: Card }, script?: { variant: "a" | "b"; scriptId: string }) {
+  function handleShapeDone(
+    row: { action: TodayAction; card: Card },
+    script?: { variant: "a" | "b"; scriptId: string },
+    copy?: { subject: string; body: string; openerSourceUrl: string | null },
+  ) {
     if (row.action.pipelineRowId) {
-      settlePipeline(row, "done");
+      settlePipeline(row, "done", copy);
       return;
     }
     const kind = row.action.kind;
@@ -446,6 +531,9 @@ export function FocusClient({
       scriptUsed: script?.variant,
       scriptId: script?.scriptId,
       advanceCadence: row.action.kind === "linkedin_request" ? cadenceNow === "linkedin" : undefined,
+      subject: copy?.subject,
+      body: copy?.body,
+      openerSourceUrl: copy?.openerSourceUrl,
     })
       .then((res) => {
         if (res.touchId && row.action.kind === "send_email") {
@@ -678,6 +766,14 @@ export function FocusClient({
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <button
               type="button"
+              disabled={batching || outreach.killSwitch || usedToday >= outreach.dailyCap}
+              onClick={() => void generateToday()}
+              className="border border-rule bg-panel font-semibold px-4 py-3 rounded-xl text-sm disabled:opacity-40"
+            >
+              {batching ? "Writing drafts…" : "Generate drafts for today"}
+            </button>
+            <button
+              type="button"
               onClick={() => startSession(channelFilter)}
               disabled={
                 channelFilter === "call"
@@ -699,6 +795,11 @@ export function FocusClient({
               Cancel
             </button>
           </div>
+          {batchNote && <p className="text-sm text-muted m-0">{batchNote}</p>}
+          <p className="text-xs text-dim m-0">
+            Drafts today: {usedToday} / {outreach.dailyCap}
+            {outreach.killSwitch ? " · generation is off" : ""}
+          </p>
         </div>
         {coachOpen && (
           <FlowCoach
@@ -755,6 +856,8 @@ export function FocusClient({
           onLogReply={(row) =>
             setReplyTarget({ id: row.card.lead.id, name: row.card.lead.businessName, channel: row.action.channel })
           }
+          outreach={{ ...outreach, drafts, usedToday, repEmail }}
+          onGenerateDraft={onGenerateDraft}
         />
         {replyDialog}
         {coachOpen && (

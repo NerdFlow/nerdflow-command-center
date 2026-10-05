@@ -2,6 +2,7 @@ import { PrismaClient, type Role } from "@prisma/client";
 import type { CampaignStrategy } from "../src/server/strategy";
 import { computeDedupeKey } from "../src/server/leads";
 import { hashPassword } from "../src/server/password";
+import { seedOutreachKb } from "./seedOutreachKb";
 
 const prisma = new PrismaClient();
 
@@ -95,6 +96,9 @@ async function main() {
       assistantName: "Flow",
     },
   });
+
+  const kbCount = await seedOutreachKb(prisma, org.id);
+  console.log(`Outreach knowledge base: ${kbCount} rows`);
 
   const seededLogins: { name: string; email: string; role: Role; password: string | null }[] = [];
 
