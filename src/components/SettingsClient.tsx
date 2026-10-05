@@ -5,6 +5,7 @@ import { Btn, Panel } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import { TITAN_FROM } from "@/lib/pipelineToday";
 import type { MailboxSignatureMap } from "@/lib/mailboxSignature";
+import { liveAiSummary, type LiveAiConfig } from "@/lib/liveAi";
 import { updateOrgSettings } from "@/server/actions/admin";
 
 type CadenceChannel = "email" | "linkedin" | "call";
@@ -30,6 +31,8 @@ type OutreachUsage = {
   tokensToday: number;
   tokensMonth: number;
   costMonthUsd: number;
+  lastDraftLatencyMs: number | null;
+  lastDraftModel: string | null;
 };
 
 function signatureRows(map: MailboxSignatureMap): SignatureRow[] {
@@ -48,7 +51,7 @@ const CHANNEL_LABEL: Record<CadenceChannel, string> = {
   call: "Call",
 };
 
-export function SettingsClient({ settings, usage }: { settings: Settings; usage: OutreachUsage }) {
+export function SettingsClient({ settings, usage, ai }: { settings: Settings; usage: OutreachUsage; ai: LiveAiConfig }) {
   const toast = useToast();
   const [form, setForm] = useState(settings);
   const [signatures, setSignatures] = useState<SignatureRow[]>(() => signatureRows(settings.mailboxSignatures));
@@ -192,6 +195,7 @@ export function SettingsClient({ settings, usage }: { settings: Settings; usage:
             onChange={(e) => set("outreachDraftDailyCap", Number(e.target.value))}
           />
         </label>
+        <p className="text-sm mb-3">{liveAiSummary(ai)}</p>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
           <dt className="text-muted">Drafts today</dt>
           <dd>{usage.draftsToday}</dd>
@@ -201,6 +205,10 @@ export function SettingsClient({ settings, usage }: { settings: Settings; usage:
           <dd>{usage.tokensMonth.toLocaleString()}</dd>
           <dt className="text-muted">Cost this month</dt>
           <dd>${usage.costMonthUsd.toFixed(2)}</dd>
+          <dt className="text-muted">Last draft latency</dt>
+          <dd>{usage.lastDraftLatencyMs == null ? "None yet" : `${usage.lastDraftLatencyMs.toLocaleString()} ms`}</dd>
+          <dt className="text-muted">Last model used</dt>
+          <dd>{usage.lastDraftModel ?? "None yet"}</dd>
         </dl>
       </Panel>
 

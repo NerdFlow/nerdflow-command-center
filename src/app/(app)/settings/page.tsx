@@ -1,5 +1,6 @@
 import { parseFocusCadence } from "@/lib/focusCadence";
 import { parseMailboxSignatures } from "@/lib/mailboxSignature";
+import { outreachDraftAiConfig } from "@/server/ai/draftModel";
 import { requireRole } from "@/server/auth";
 import { loadOutreachUsage } from "@/server/kb/load";
 import { getOrgSettings } from "@/server/settings";
@@ -21,6 +22,7 @@ export default async function SettingsPage() {
       <p className="text-muted mb-6">Domain, assistant name, Focus cadence, AI budget, outreach drafts, and products.</p>
       <div className="space-y-4">
         <SettingsClient
+          ai={outreachDraftAiConfig()}
           usage={usage}
           settings={{
             allowedEmailDomain: settings.allowedEmailDomain,

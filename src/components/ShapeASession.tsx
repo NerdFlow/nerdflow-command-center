@@ -19,7 +19,9 @@ import {
 } from "@/lib/todayCards";
 import type { ShapeCard } from "@/lib/shapeCard";
 import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
+import { OpenInTitan } from "@/components/OpenInTitan";
 import { OutreachDraftPanel, reviewOutreachCopy } from "@/components/OutreachDraftPanel";
+import { titanOpenState } from "@/lib/titanOpen";
 import { checklistApplies, firstHttpUrl } from "@/lib/outreachChecklist";
 import { sendingMailbox, type MailboxSignatureMap } from "@/lib/mailboxSignature";
 import type { ChecklistCatalog } from "@/lib/outreachChecklist";
@@ -362,23 +364,39 @@ export function ShapeASession({
         })
       : null;
   const sendBlocked = Boolean(outreachReview && outreachReview.blocks.length > 0);
+  const blockReasons = outreachReview?.blocks.map((issue) => issue.reason) ?? [];
   copyRef.current = {
     body: messageApplies ? draftBody : draftText,
     subject: messageApplies ? draftSubject : emailParts?.subject || pipeline?.mailtoSubject || "",
     opener: openerUrl.trim(),
     blocked: sendBlocked,
   };
-  const mailtoHref = sendBlocked
-    ? null
-    : messageApplies && current.action.channel === "email" && lead.email
-      ? mailtoUrl(lead.email, draftSubject, draftBody)
-      : pipeline
-        ? pipelineMailtoHref(pipeline)
-        : kind === "send_email" && lead.email && emailParts
-          ? mailtoUrl(lead.email, emailParts.subject, emailParts.body)
-          : kind === "reply" && current.action.channel === "email" && lead.email && reply?.responseDraft
-            ? mailtoUrl(lead.email, `Re: ${lead.businessName}`, reply.responseDraft)
-            : null;
+  const titanDraft = (messageApplies ? draftBody : draftText).trim();
+  const titanAddress =
+    current.action.channel === "email"
+      ? lead.email?.trim() || (pipeline?.linkKind === "mailto" ? pipeline.mailtoTo?.trim() || "" : "")
+      : pipeline?.linkKind === "mailto"
+        ? pipeline.mailtoTo?.trim() || ""
+        : "";
+  const titanHref =
+    titanAddress && titanDraft
+      ? messageApplies && current.action.channel === "email"
+        ? mailtoUrl(titanAddress, draftSubject, draftBody)
+        : pipeline?.linkKind === "mailto"
+          ? pipelineMailtoHref(pipeline)
+          : kind === "send_email" && emailParts
+            ? mailtoUrl(titanAddress, emailParts.subject, emailParts.body)
+            : kind === "reply" && current.action.channel === "email" && reply?.responseDraft
+              ? mailtoUrl(titanAddress, `Re: ${lead.businessName}`, reply.responseDraft)
+              : null
+      : null;
+  const titan = titanOpenState({
+    show: Boolean(titanAddress),
+    href: titanHref,
+    sendBlocked,
+    reasons: blockReasons,
+    hasDraft: titanDraft.length > 0,
+  });
   const wantsLinkedIn =
     kind === "linkedin_request" ||
     (kind === "follow_up" && pipeline?.linkKind === "linkedin_profile") ||
@@ -467,11 +485,7 @@ export function ShapeASession({
                   {copied ? "Copied" : pipeline ? "Copy" : "Copy draft"}
                 </button>
               )}
-              {mailtoHref && (
-                <a href={mailtoHref} className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover">
-                  Open in Titan
-                </a>
-              )}
+              <OpenInTitan state={titan} />
               {linkedinHref && (
                 <a href={linkedinHref} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover">
                   Open LinkedIn

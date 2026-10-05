@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
 import type { ZodType } from "zod";
+import { modelForProvider, resolveAiProvider, type AiProviderName } from "@/server/ai/draftModel";
 import { prisma } from "@/server/db";
 import { getOrgSettings } from "@/server/settings";
 import type { AiFeature } from "@prisma/client";
@@ -16,13 +17,16 @@ import type { AiFeature } from "@prisma/client";
  * set, otherwise Claude.
  */
 export class AiUnavailableError extends Error {
-  constructor(reason: string) {
+  /** True when this failure was already written to ai_usage. */
+  readonly logged: boolean;
+  constructor(reason: string, options?: { logged?: boolean }) {
     super(`AI unavailable: ${reason}`);
     this.name = "AiUnavailableError";
+    this.logged = options?.logged ?? false;
   }
 }
 
-type Provider = "gemini" | "anthropic";
+type Provider = AiProviderName;
 
 // Rough planning estimates (USD per million tokens).
 const PRICING_PER_MTOK: Record<string, { in: number; out: number }> = {
@@ -40,16 +44,7 @@ let cachedAnthropic: Anthropic | null | undefined;
 let cachedGemini: GoogleGenAI | null | undefined;
 
 function resolveProvider(): Provider | null {
-  const choice = process.env.AI_PROVIDER?.trim().toLowerCase();
-  if (choice === "gemini" || choice === "google") {
-    return process.env.GEMINI_API_KEY ? "gemini" : null;
-  }
-  if (choice === "anthropic" || choice === "claude") {
-    return process.env.ANTHROPIC_API_KEY ? "anthropic" : null;
-  }
-  if (process.env.GEMINI_API_KEY) return "gemini";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  return null;
+  return resolveAiProvider();
 }
 
 export function isAiEnabled() {
@@ -74,16 +69,8 @@ function getGemini(): GoogleGenAI | null {
   return cachedGemini;
 }
 
-function modelMatches(provider: Provider, model: string) {
-  return provider === "gemini" ? !model.startsWith("claude") : !model.startsWith("gemini");
-}
-
 function modelFor(provider: Provider, requested?: string) {
-  const builtin = provider === "gemini" ? "gemini-3.6-flash" : "claude-sonnet-5";
-  const envDefault = process.env.AI_MODEL_DEFAULT;
-  const fallback = envDefault && modelMatches(provider, envDefault) ? envDefault : builtin;
-  if (requested && modelMatches(provider, requested)) return requested;
-  return fallback;
+  return modelForProvider(provider, requested);
 }
 
 function estimateCostUsd(model: string, inputTokens: number, outputTokens: number) {
@@ -152,7 +139,23 @@ async function logUsage(params: {
   success: boolean;
   cardId?: string | null;
   taskType?: string | null;
+  usageId?: string | null;
 }) {
+  const costUsd = estimateCostUsd(params.model, params.inputTokens, params.outputTokens);
+  if (params.usageId) {
+    await prisma.aiUsage.update({
+      where: { id: params.usageId },
+      data: {
+        model: params.model,
+        inputTokens: params.inputTokens,
+        outputTokens: params.outputTokens,
+        costUsd,
+        latencyMs: params.latencyMs,
+        success: params.success,
+      },
+    });
+    return;
+  }
   await prisma.aiUsage.create({
     data: {
       organizationId: params.organizationId,
@@ -161,7 +164,7 @@ async function logUsage(params: {
       model: params.model,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
-      costUsd: estimateCostUsd(params.model, params.inputTokens, params.outputTokens),
+      costUsd,
       latencyMs: params.latencyMs,
       success: params.success,
       cardId: params.cardId ?? null,
@@ -388,6 +391,8 @@ export async function callClaudeJSON<T>(opts: {
   maxTokens?: number;
   cardId?: string | null;
   taskType?: string | null;
+  /** When set, the reserved ai_usage row is updated instead of inserting a second one. */
+  usageId?: string | null;
 }): Promise<T> {
   const provider = resolveProvider();
   if (!provider) {
@@ -438,8 +443,9 @@ export async function callClaudeJSON<T>(opts: {
         success: false,
         cardId: opts.cardId,
         taskType: opts.taskType,
+        usageId: opts.usageId,
       });
-      throw new AiUnavailableError("model output failed schema validation twice");
+      throw new AiUnavailableError("model output failed schema validation twice", { logged: true });
     }
 
     await logUsage({
@@ -453,6 +459,7 @@ export async function callClaudeJSON<T>(opts: {
       success: true,
       cardId: opts.cardId,
       taskType: opts.taskType,
+      usageId: opts.usageId,
     });
     return parsed.data;
   } catch (err) {
@@ -468,8 +475,9 @@ export async function callClaudeJSON<T>(opts: {
       success: false,
       cardId: opts.cardId,
       taskType: opts.taskType,
+      usageId: opts.usageId,
     });
-    throw new AiUnavailableError(err instanceof Error ? err.message : "unknown error");
+    throw new AiUnavailableError(err instanceof Error ? err.message : "unknown error", { logged: true });
   }
 }
 

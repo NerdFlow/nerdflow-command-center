@@ -2,6 +2,7 @@ import type { ChecklistCatalog, SafeQuote } from "@/lib/outreachChecklist";
 import { parseMailboxSignatures, type MailboxSignatureMap } from "@/lib/mailboxSignature";
 import { pktDateStamp } from "@/lib/pipelineToday";
 import { prisma } from "@/server/db";
+import { PENDING_DRAFT_MODEL } from "@/server/outreach/draftCap";
 import type { KbContextRow } from "@/server/kb/types";
 
 export type OutreachDraftView = {
@@ -17,6 +18,8 @@ export type OutreachUsage = {
   tokensToday: number;
   tokensMonth: number;
   costMonthUsd: number;
+  lastDraftLatencyMs: number | null;
+  lastDraftModel: string | null;
 };
 
 export type OutreachFocusData = {
@@ -70,9 +73,21 @@ export async function loadOutreachForFocus(organizationId: string, userId: strin
   };
 }
 
+const APPROVED_KB_CACHE_MS = 60_000;
+
+const approvedKbCache = new Map<string, { at: number; entries: KbContextRow[] }>();
+
+export function clearApprovedKbCache(organizationId?: string): void {
+  if (organizationId) approvedKbCache.delete(organizationId);
+  else approvedKbCache.clear();
+}
+
+/** Approved rows for one org. A short cache so a batch does not reload the pack on every card. */
 export async function loadApprovedKbEntries(organizationId: string): Promise<KbContextRow[]> {
+  const cached = approvedKbCache.get(organizationId);
+  if (cached && Date.now() - cached.at < APPROVED_KB_CACHE_MS) return cached.entries;
   const rows = await prisma.outreachKbEntry.findMany({ where: { organizationId, status: "approved" } });
-  return rows.map((row) => ({
+  const entries = rows.map((row) => ({
     key: row.key,
     layer: row.layer,
     kind: row.kind,
@@ -85,10 +100,12 @@ export async function loadApprovedKbEntries(organizationId: string): Promise<KbC
     sourcePath: row.sourcePath,
     version: row.version,
   }));
+  approvedKbCache.set(organizationId, { at: Date.now(), entries });
+  return entries;
 }
 
 export async function loadOutreachUsage(organizationId: string): Promise<OutreachUsage> {
-  const [today, month] = await Promise.all([
+  const [today, month, last] = await Promise.all([
     prisma.aiUsage.aggregate({
       where: { organizationId, feature: "outreach_draft", createdAt: { gte: pktDayStart() } },
       _count: { _all: true },
@@ -98,12 +115,19 @@ export async function loadOutreachUsage(organizationId: string): Promise<Outreac
       where: { organizationId, feature: "outreach_draft", createdAt: { gte: monthStartUtc() } },
       _sum: { inputTokens: true, outputTokens: true, costUsd: true },
     }),
+    prisma.aiUsage.findFirst({
+      where: { organizationId, feature: "outreach_draft", model: { not: PENDING_DRAFT_MODEL } },
+      orderBy: { createdAt: "desc" },
+      select: { latencyMs: true, model: true },
+    }),
   ]);
   return {
     draftsToday: today._count._all,
     tokensToday: (today._sum.inputTokens ?? 0) + (today._sum.outputTokens ?? 0),
     tokensMonth: (month._sum.inputTokens ?? 0) + (month._sum.outputTokens ?? 0),
     costMonthUsd: Number(month._sum.costUsd ?? 0),
+    lastDraftLatencyMs: last?.latencyMs ?? null,
+    lastDraftModel: last?.model ?? null,
   };
 }
 

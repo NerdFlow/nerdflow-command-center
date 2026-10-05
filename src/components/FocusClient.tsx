@@ -13,7 +13,9 @@ import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
 import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
 import { LogReplyDialog } from "@/components/LogReplyDialog";
+import { OpenInTitan } from "@/components/OpenInTitan";
 import { ShapeASession } from "@/components/ShapeASession";
+import { titanOpenState } from "@/lib/titanOpen";
 import { TodaySyncPanel } from "@/components/TodaySyncPanel";
 import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
 import type { FocusSyncState } from "@/server/todayBoard";
@@ -950,6 +952,13 @@ export function FocusClient({
   const askFor = current.lead.contactName?.trim() || current.lead.contactRole?.trim() || "the owner";
   const place = [current.lead.businessName, current.lead.city].filter(Boolean).join(" · ");
   const mailtoHref = current.lead.email && emailParts ? mailtoUrl(current.lead.email, emailParts.subject, emailParts.body) : null;
+  const titan = titanOpenState({
+    show: channel === "email" && Boolean(current.lead.email?.trim()),
+    href: mailtoHref,
+    sendBlocked: false,
+    reasons: [],
+    hasDraft: Boolean(emailParts?.body.trim()),
+  });
   const linkedinHref = channel === "linkedin" ? linkedinOpenUrl(current.lead) : null;
   const stack = focusSessionStacks();
   const callWhy =
@@ -1021,16 +1030,7 @@ export function FocusClient({
               >
                 {copied ? "Copied" : "Copy draft"}
               </button>
-              {mailtoHref ? (
-                <a
-                  href={mailtoHref}
-                  className="inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover transition-colors"
-                >
-                  Open in Titan
-                </a>
-              ) : (
-                <p className="text-sm text-stop m-0">No email on file.</p>
-              )}
+              {current.lead.email ? <OpenInTitan state={titan} /> : <p className="text-sm text-stop m-0">No email on file.</p>}
             </div>
           )}
 
