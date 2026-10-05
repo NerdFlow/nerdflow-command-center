@@ -7,6 +7,8 @@ import { prisma } from "@/server/db";
 import { loadRouteReps } from "@/server/focusRouting";
 import { ensurePipelineCampaign, upsertPipelineLead } from "@/server/pipelineTodaySync";
 import { FocusIngestError, commitPipelineTodayOutcome } from "@/server/pipelineTodayOutcome";
+import { firstHttpUrl } from "@/lib/outreachChecklist";
+import { assertOutreachSendable, OutreachSendBlocked, sendingMailbox } from "@/server/outreach/sendGate";
 import {
   planComplete,
   planFocusRebuild,
@@ -276,6 +278,33 @@ export async function applyFocusIngestComplete(input: {
   if (!plan.ok) throw new FocusIngestError(plan.status, plan.error, { cardId: row.externalKey });
   if (plan.already) {
     return { cardId: row.externalKey, outcome: input.outcome, status: plan.status, idempotent: true, touchId: null };
+  }
+
+  if (input.outcome === "done") {
+    const draft = await prisma.outreachDraft.findUnique({
+      where: { organizationId_actionKey: { organizationId: row.organizationId, actionKey: `pipeline:${row.id}` } },
+    });
+    try {
+      await assertOutreachSendable({
+        organizationId: row.organizationId,
+        mailbox: sendingMailbox({ channel: row.channel, pipeline: true, repEmail: "" }),
+        channel: row.channel,
+        kind: row.kind,
+        cadenceStep: row.lead.cadenceStep,
+        blankMessage: row.connectNoNote || !(draft?.body ?? row.message).trim(),
+        subject: draft?.subject || row.mailtoSubject || "",
+        body: draft?.body || row.message,
+        companyName: row.company,
+        openerSourceUrl: firstHttpUrl(draft?.openerSourceUrl, row.lead.sourceUrl, row.intel, row.linkUrl),
+        lead: row.lead,
+        intel: row.intel,
+      });
+    } catch (err) {
+      if (err instanceof OutreachSendBlocked) {
+        throw new FocusIngestError(422, err.message, { reasons: err.reasons, cardId: row.externalKey });
+      }
+      throw err;
+    }
   }
 
   const saved = await commitPipelineTodayOutcome({

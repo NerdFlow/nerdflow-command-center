@@ -195,6 +195,25 @@ enum AiFeature {
   lead_discovery
   research
   live_coaching
+  outreach_draft
+}
+
+enum KbLayer {
+  sales_craft
+  core
+  icp
+}
+
+enum KbScope {
+  universal
+  icp
+}
+
+enum KbStatus {
+  draft
+  pending
+  approved
+  retired
 }
 
 enum NotificationChannel {
@@ -251,6 +270,8 @@ model Organization {
   settings      OrgSettings?
   pipelineTodayRows PipelineTodayRow[]
   focusCardSkips FocusCardSkip[]
+  outreachKbEntries OutreachKbEntry[]
+  outreachDrafts   OutreachDraft[]
 
   @@map("organizations")
 }
@@ -266,6 +287,14 @@ model OrgSettings {
   workingHoursDefault  Json     @default("{\"start\":\"09:00\",\"end\":\"17:30\",\"days\":[1,2,3,4,5]}") @map("working_hours_default")
   /// Team Focus sequence. Day 0 is the day the first card is queued. Offsets are Asia/Karachi calendar days.
   focusCadence         Json     @default("[{\"day\":0,\"channel\":\"email\"},{\"day\":2,\"channel\":\"linkedin\"},{\"day\":4,\"channel\":\"email\"},{\"day\":10,\"channel\":\"email\"}]") @map("focus_cadence")
+  /// Stops Focus "Generate draft" calls. Humans still send from their own tools.
+  outreachDraftKillSwitch Boolean @default(false) @map("outreach_draft_kill_switch")
+  outreachDraftDailyCap   Int     @default(60) @map("outreach_draft_daily_cap")
+  /// Optional until filled. The pre-send checklist warns, and blocks only after a value is saved.
+  postalAddress           String? @map("postal_address") @db.Text
+  optOutLine              String? @map("opt_out_line") @db.Text
+  /// Mailbox address → { name, signature }. Stub until a lead fills it in.
+  mailboxSignatures       Json    @default("{}") @map("mailbox_signatures")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("org_settings")
@@ -316,6 +345,8 @@ model User {
   sessions          FocusSession[]
   pipelineTodayRows PipelineTodayRow[]
   focusCardSkips    FocusCardSkip[]
+  outreachDrafts    OutreachDraft[]
+  kbEntriesUpdated  OutreachKbEntry[] @relation("KbUpdatedBy")
 
   @@map("users")
 }
@@ -598,6 +629,7 @@ model Lead {
   replies       Reply[]
   pipelineTodayRows PipelineTodayRow[]
   focusCardSkips FocusCardSkip[]
+  outreachDrafts OutreachDraft[]
 
   @@index([dedupeKey])
   @@index([ownerId, status, nextTouchAt])
@@ -932,8 +964,13 @@ model AiUsage {
   costUsd        Decimal      @default(0) @map("cost_usd") @db.Decimal(10, 4)
   latencyMs      Int          @default(0) @map("latency_ms")
   success        Boolean      @default(true)
+  /// Focus card id (pipeline row id or cadence action key) when this call drafted one card.
+  cardId         String?      @map("card_id")
+  /// generate | regenerate | batch_generate. Empty for older features.
+  taskType       String?      @map("task_type")
   createdAt      DateTime     @default(now()) @map("created_at")
 
+  @@index([organizationId, feature, createdAt])
   @@map("ai_usage")
 }
 
@@ -971,4 +1008,56 @@ model Notification {
   createdAt      DateTime            @default(now()) @map("created_at")
 
   @@map("notifications")
+}
+
+/// Outreach knowledge base. The database is the source of truth after import.
+model OutreachKbEntry {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  layer          KbLayer
+  kind           String
+  icp            String?
+  scope          KbScope
+  status         KbStatus
+  key            String
+  title          String
+  body           String       @db.Text
+  payload        Json         @default("{}")
+  sourcePath     String       @map("source_path")
+  sourceLink     String?      @map("source_link") @db.Text
+  version        Int          @default(1)
+  updatedById    String?      @map("updated_by")
+  updatedBy      User?        @relation("KbUpdatedBy", fields: [updatedById], references: [id])
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@unique([organizationId, key])
+  @@index([organizationId, status, kind])
+  @@map("outreach_kb_entries")
+}
+
+/// Saved Focus draft. Reopening a card reads this row and does not call the model again.
+model OutreachDraft {
+  id               String       @id @default(uuid())
+  organizationId   String       @map("organization_id")
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId           String       @map("user_id")
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadId           String       @map("lead_id")
+  lead             Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actionKey        String       @map("action_key")
+  pipelineRowId    String?      @map("pipeline_row_id")
+  channel          Channel
+  subject          String       @default("")
+  body             String       @db.Text
+  openerSourceUrl  String?      @map("opener_source_url") @db.Text
+  regenerateCount  Int          @default(0) @map("regenerate_count")
+  source           String
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  @@unique([organizationId, actionKey])
+  @@index([leadId])
+  @@map("outreach_drafts")
 }

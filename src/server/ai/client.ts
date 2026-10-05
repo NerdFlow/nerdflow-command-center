@@ -150,6 +150,8 @@ async function logUsage(params: {
   outputTokens: number;
   latencyMs: number;
   success: boolean;
+  cardId?: string | null;
+  taskType?: string | null;
 }) {
   await prisma.aiUsage.create({
     data: {
@@ -162,6 +164,8 @@ async function logUsage(params: {
       costUsd: estimateCostUsd(params.model, params.inputTokens, params.outputTokens),
       latencyMs: params.latencyMs,
       success: params.success,
+      cardId: params.cardId ?? null,
+      taskType: params.taskType ?? null,
     },
   });
 }
@@ -382,6 +386,8 @@ export async function callClaudeJSON<T>(opts: {
   organizationId: string;
   userId?: string | null;
   maxTokens?: number;
+  cardId?: string | null;
+  taskType?: string | null;
 }): Promise<T> {
   const provider = resolveProvider();
   if (!provider) {
@@ -430,6 +436,8 @@ export async function callClaudeJSON<T>(opts: {
         outputTokens,
         latencyMs: Date.now() - start,
         success: false,
+        cardId: opts.cardId,
+        taskType: opts.taskType,
       });
       throw new AiUnavailableError("model output failed schema validation twice");
     }
@@ -443,6 +451,8 @@ export async function callClaudeJSON<T>(opts: {
       outputTokens,
       latencyMs: Date.now() - start,
       success: true,
+      cardId: opts.cardId,
+      taskType: opts.taskType,
     });
     return parsed.data;
   } catch (err) {
@@ -456,6 +466,8 @@ export async function callClaudeJSON<T>(opts: {
       outputTokens,
       latencyMs: Date.now() - start,
       success: false,
+      cardId: opts.cardId,
+      taskType: opts.taskType,
     });
     throw new AiUnavailableError(err instanceof Error ? err.message : "unknown error");
   }

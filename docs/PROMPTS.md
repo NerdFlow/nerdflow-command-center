@@ -220,3 +220,9 @@ When the rep asks you to change something, reply in text and add a JSON block at
 {"proposed_actions":[{"type":"reschedule_touch|set_lead_status|add_note|create_deal|set_next_step","entity_id":"","params":{},"label":"button text"}]}
 Actions are shown as buttons the rep must click. Never claim an action happened.
 ```
+
+## 12. Outreach draft (`outreach-draft-v1`)
+
+Focus calls this only when a person clicks Generate or Regenerate. The model returns `{"subject","body"}`. The app stores the draft. It does not send.
+
+The user prompt puts approved knowledge in `<kb>`, mailbox and lead fields in `<lead>`, and stored opener facts in `<untrusted_lead>`. Claims stay inside approved Product Truth. The hiring opener is allowed only when the untrusted text says they are hiring. Email 1 has no links. One call to action. Fallback copy is used when the model is unavailable.

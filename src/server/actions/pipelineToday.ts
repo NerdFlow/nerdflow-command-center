@@ -8,6 +8,8 @@ import { applyPipelineTodaySync } from "@/server/pipelineTodaySync";
 import { readPipelineTodayGrid } from "@/server/googleSheets";
 import { commitPipelineTodayOutcome } from "@/server/pipelineTodayOutcome";
 import { parseTable } from "@/lib/pipelineToday";
+import { firstHttpUrl } from "@/lib/outreachChecklist";
+import { assertOutreachSendable, OutreachSendBlocked, sendingMailbox } from "@/server/outreach/sendGate";
 
 const syncSchema = z.object({
   source: z.enum(["sheets", "paste"]),
@@ -17,6 +19,9 @@ const syncSchema = z.object({
 const outcomeSchema = z.object({
   rowId: z.string().min(1),
   outcome: z.enum(["done", "skip", "needs_follow_up"]),
+  subject: z.string().max(200).optional(),
+  body: z.string().max(8000).optional(),
+  openerSourceUrl: z.string().max(2000).nullable().optional(),
 });
 
 export type PipelineSyncResult =
@@ -88,6 +93,54 @@ export async function recordPipelineOutcome(raw: z.input<typeof outcomeSchema>) 
   if (!row) throw new Error("That Today card is gone. Sync again.");
   if (row.ownerId !== user.id) throw new Error("That card is on someone else's queue.");
   if (params.outcome === "skip") throw new Error("Skip needs a reason.");
+
+  if (params.outcome === "done") {
+    const actionKey = `pipeline:${row.id}`;
+    const existing = await prisma.outreachDraft.findUnique({
+      where: { organizationId_actionKey: { organizationId: user.organizationId, actionKey } },
+    });
+    const subject = params.subject ?? existing?.subject ?? row.mailtoSubject ?? "";
+    const body = params.body ?? existing?.body ?? row.message;
+    const openerSourceUrl = firstHttpUrl(params.openerSourceUrl, existing?.openerSourceUrl, row.lead.sourceUrl, row.intel, row.linkUrl);
+    if (params.subject !== undefined || params.body !== undefined) {
+      await prisma.outreachDraft.upsert({
+        where: { organizationId_actionKey: { organizationId: user.organizationId, actionKey } },
+        create: {
+          organizationId: user.organizationId,
+          userId: user.id,
+          leadId: row.leadId,
+          actionKey,
+          pipelineRowId: row.id,
+          channel: row.channel,
+          subject,
+          body,
+          openerSourceUrl,
+          regenerateCount: existing?.regenerateCount ?? 0,
+          source: "manual",
+        },
+        update: { subject, body, openerSourceUrl, source: "manual" },
+      });
+    }
+    try {
+      await assertOutreachSendable({
+        organizationId: user.organizationId,
+        mailbox: sendingMailbox({ channel: row.channel, pipeline: true, repEmail: user.email }),
+        channel: row.channel,
+        kind: row.kind,
+        cadenceStep: row.lead.cadenceStep,
+        blankMessage: row.connectNoNote || !body.trim(),
+        subject,
+        body,
+        companyName: row.company,
+        openerSourceUrl,
+        lead: row.lead,
+        intel: row.intel,
+      });
+    } catch (err) {
+      if (err instanceof OutreachSendBlocked) throw new Error(err.message);
+      throw err;
+    }
+  }
 
   const saved = await commitPipelineTodayOutcome({
     organizationId: user.organizationId,
