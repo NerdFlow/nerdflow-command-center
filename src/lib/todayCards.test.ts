@@ -122,6 +122,16 @@ describe("one card per Today row", () => {
     expect(actions.filter((action) => actionVisible(action, "call")).every((action) => action.kind === "call")).toBe(true);
   });
 
+  it("shows only the due cadence step, not the rest of the sequence", () => {
+    const actions = projectTodayActions({
+      lead: lead({ phone: "512-555-0199" }),
+      allowedChannels: ["call", "email", "linkedin"],
+      dueChannel: "email",
+    });
+    expect(actions.map((action) => action.kind)).toEqual(["send_email"]);
+    expect(actions.filter((action) => action.channel === "email")).toHaveLength(1);
+  });
+
   it("hides a sent connection request and still shows the email", () => {
     const actions = expandShapeLead(lead({ linkedinRequestSent: true }), ["email", "linkedin"]);
     expect(actions.map((action) => action.kind)).toEqual(["send_email"]);

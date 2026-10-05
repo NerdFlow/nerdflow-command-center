@@ -274,6 +274,31 @@ describe("loadFocusBoard", () => {
     expect(board.sync?.openCount).toBe(3);
   });
 
+  it("keeps one open card when the same lead and channel is queued twice", async () => {
+    state.queue = [];
+    state.replies = [];
+    state.rows = [
+      pipelineRow({ id: "email-older", sheetRow: 2, status: "open", leadId: "lead-ada", queueDate: queueDateAsUtc("2020-01-01") }),
+      pipelineRow({ id: "email-newer", sheetRow: 1, status: "open", leadId: "lead-ada", queueDate: queueDateAsUtc(pktDateStamp()) }),
+      pipelineRow({ id: "linkedin-open", sheetRow: 3, status: "open", leadId: "lead-ada", channel: "linkedin", queueDate: queueDateAsUtc(pktDateStamp()) }),
+    ];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID);
+
+    expect(board.cards.map((card) => card.pipeline?.rowId)).toEqual(["email-older", "linkedin-open"]);
+  });
+
+  it("does not open a second card for a lead that already has an open pipeline card", async () => {
+    state.rows = [pipelineRow({ id: "pipe-open", sheetRow: 1, status: "open", leadId: "lead-queue" })];
+    state.replies = [];
+
+    const board = await loadFocusBoard(OWNER_ID, ORG_ID);
+
+    expect(board.cards.map((card) => card.lead.id)).toEqual(["lead-queue"]);
+    expect(board.cards[0]?.pipeline?.rowId).toBe("pipe-open");
+    expect(board.cards.filter((card) => card.lead.id === "lead-queue")).toHaveLength(1);
+  });
+
   it("keeps the regular queue when today's pipeline rows are only done or dropped", async () => {
     state.rows = [
       pipelineRow({ id: "pipe-done", sheetRow: 1, status: "done", leadId: "lead-done" }),

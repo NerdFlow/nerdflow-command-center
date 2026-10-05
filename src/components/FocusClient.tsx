@@ -47,6 +47,12 @@ import type { Channel, TouchOutcome, LeadSource } from "@prisma/client";
 
 type Card = ShapeCard;
 
+function cardStaysOnBoard(card: Card, allowedChannels: Channel[], worksCall: boolean) {
+  if (card.pipeline) return card.pipeline.channel !== "call" || worksCall;
+  if (card.dueChannel) return Boolean(card.replyOnly) || allowedChannels.includes(card.dueChannel);
+  return Boolean(card.replyOnly) || cardInRepQueue(card, allowedChannels);
+}
+
 const SOURCE_LABEL: Partial<Record<LeadSource, string>> = {
   google_places: "Google Places",
   csv: "CSV import",
@@ -138,12 +144,7 @@ export function FocusClient({
 }) {
   const router = useRouter();
   const worksCall = allowedChannels.includes("call");
-  const [cards, setCards] = useState(() =>
-    initialCards.filter((c) => {
-      if (c.pipeline) return c.pipeline.channel !== "call" || worksCall;
-      return c.replyOnly || cardInRepQueue(c, allowedChannels);
-    }),
-  );
+  const [cards, setCards] = useState(() => initialCards.filter((card) => cardStaysOnBoard(card, allowedChannels, worksCall)));
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => initialCards.flatMap((card) => followUpKeysFromSignals(card.lead.signals)));
   const [deferredKeys, setDeferredKeys] = useState<string[]>(() => initialCards.flatMap((card) => skipKeysFromSignals(card.lead.signals)));
   const [pinnedKeys, setPinnedKeys] = useState<string[]>([]);
@@ -174,8 +175,8 @@ export function FocusClient({
   const [callSkipOpen, setCallSkipOpen] = useState(false);
 
   useEffect(() => {
-    setCards(initialCards.filter((card) => card.replyOnly || cardInRepQueue(card, allowedChannels)));
-  }, [initialCards, allowedChannels]);
+    setCards(initialCards.filter((card) => cardStaysOnBoard(card, allowedChannels, worksCall)));
+  }, [initialCards, allowedChannels, worksCall]);
 
   const countByChannel = useMemo(() => {
     const count = (channel: Channel) => selectFocusCards(cards, channel, sourceFilter, businessHoursOnly, repTimezone).length;
@@ -192,9 +193,10 @@ export function FocusClient({
     const expanded = cards.flatMap((card) => {
       if (sourceFilter !== "all" && card.lead.source !== sourceFilter) return [];
       const callAllowedNow = !businessHoursOnly || leadLocalTimeStatus(card.lead, repTimezone).inBusinessHours;
-      return projectTodayActions({
+        return projectTodayActions({
         pipeline: card.pipeline,
         hideCall: !worksCall,
+        dueChannel: card.dueChannel,
         allowedChannels,
         lead: {
           id: card.lead.id,
@@ -430,11 +432,13 @@ export function FocusClient({
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     setTouchesLogged((n) => n + 1);
-    const cadenceNow = resolveLeadChannel({
-      strategy: row.card.campaign.strategy,
-      cadenceStep: row.card.lead.cadenceStep,
-      nextChannelOverride: row.card.lead.nextChannelOverride,
-    });
+    const cadenceNow = row.card.dueChannel
+      ? row.card.dueChannel
+      : resolveLeadChannel({
+          strategy: row.card.campaign.strategy,
+          cadenceStep: row.card.lead.cadenceStep,
+          nextChannelOverride: row.card.lead.nextChannelOverride,
+        });
     void completeTodayRow({
       leadId: row.card.lead.id,
       kind,

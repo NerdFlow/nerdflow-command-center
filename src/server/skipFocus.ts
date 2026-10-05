@@ -1,4 +1,6 @@
 import type { Channel, LeadStatus, Prisma } from "@prisma/client";
+import { cadenceContact, parseFocusCadence, pktDayStart } from "@/lib/focusCadence";
+import { parseChannelsWorked } from "@/lib/focusRouting";
 import { asSignalRecord, withStopOutreach } from "@/lib/replyLog";
 import {
   cardForBadContactRoute,
@@ -8,6 +10,7 @@ import {
   type SkipCardSlot,
   type SkipReason,
 } from "@/lib/skipReason";
+import { cadenceFieldsForRoutedSkip } from "@/server/focusCadenceSchedule";
 import type { MappedPipelineRow, PipelineActionKind, PipelineLinkKind, PipelineOutcomeMode } from "@/lib/pipelineToday";
 import { dateStampFromDb, pktDateStamp, queueDateAsUtc } from "@/lib/pipelineToday";
 import { writeAuditLog } from "@/server/audit";
@@ -39,6 +42,8 @@ type SkipLead = {
   phone: string | null;
   signals: Prisma.JsonValue;
   cadenceStep: number;
+  cadenceStartedOn?: Date | null;
+  createdAt?: Date;
   contactName: string | null;
   businessName: string;
 };
@@ -168,7 +173,11 @@ export async function applyFocusCardSkip(input: {
     throw new FocusIngestError(409, "Card already has a different outcome", { cardId, status: input.row.status });
   }
 
-  const { reps, defaultCap } = await loadRouteReps(input.organizationId, queueDateAsUtc(today));
+  const [{ reps, defaultCap }, settings, owner] = await Promise.all([
+    loadRouteReps(input.organizationId, queueDateAsUtc(today)),
+    prisma.orgSettings.findUnique({ where: { organizationId: input.organizationId }, select: { focusCadence: true } }),
+    prisma.user.findFirst({ where: { id: input.lead.ownerId }, select: { channelsWorked: true } }),
+  ]);
   const profile = linkedinProfileUrl(input.lead.linkedinUrl, input.row?.linkKind, input.row?.linkUrl);
   const decision = decideSkip({
     reason: input.reason,
@@ -208,8 +217,31 @@ export async function applyFocusCardSkip(input: {
     leadData.nextTouchAt = null;
     leadData.nextChannelOverride = null;
   }
-  if (route && (route.slot === "linkedin" || route.slot === "call")) {
-    leadData.nextChannelOverride = route.slot;
+  if (route && (route.slot === "linkedin" || route.slot === "call") && !decision.leadStatus && !decision.stopOutreach) {
+    const anchor = input.lead.cadenceStartedOn
+      ? dateStampFromDb(input.lead.cadenceStartedOn)
+      : input.row
+        ? dateStampFromDb(input.row.queueDate)
+        : today;
+    const signalsForContact = { ...signals };
+    Object.assign(
+      leadData,
+      cadenceFieldsForRoutedSkip({
+        cadence: parseFocusCadence(settings?.focusCadence),
+        stepIndex: input.lead.cadenceStep,
+        routedChannel: route.slot,
+        anchor,
+        today,
+        contact: cadenceContact({
+          email: input.lead.email,
+          linkedinUrl: profile,
+          phone: input.lead.phone,
+          signals: decision.emailInvalid ? { ...signalsForContact, emailInvalid: true } : signalsForContact,
+        }),
+        ownerChannels: parseChannelsWorked(owner?.channelsWorked),
+        pipelineCardOpened: Boolean(input.row),
+      }),
+    );
   }
 
   const saved = await prisma.$transaction(async (tx) => {
@@ -314,6 +346,12 @@ export async function applyFocusCardSkip(input: {
           });
           routedCardId = created.externalKey;
         }
+      }
+      if (!routedCardId) {
+        await tx.lead.update({
+          where: { id: input.lead.id },
+          data: { nextTouchAt: pktDayStart(today) },
+        });
       }
     }
 

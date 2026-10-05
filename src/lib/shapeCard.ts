@@ -41,6 +41,8 @@ export type ShapeCard = {
   replyOnly?: boolean;
   /** Set when this card is one Sales Pipeline Today row. Skips cadence expansion. */
   pipeline?: PipelineCardView;
+  /** The one cadence step that is due. Absent on pipeline and reply cards. */
+  dueChannel?: Channel;
 };
 
 export type CoachDirectoryLead = {

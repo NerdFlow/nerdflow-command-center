@@ -135,6 +135,7 @@ export async function applyFocusIngestRebuild(input: RebuildApplyInput): Promise
           const lead = await upsertPipelineLead(tx, orgId, card.leadOwnerId, campaign.id, card.row, {
             dealCode: input.accepted.find((item) => item.cardId === card.cardId)?.dealCode ?? null,
             source: input.source,
+            queueDate: input.datePkt,
           });
           const blockReason = outreachBlockReason(lead);
           const blocked = blockReason !== null;

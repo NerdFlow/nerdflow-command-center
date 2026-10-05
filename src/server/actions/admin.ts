@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { requireRole } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { writeAuditLog } from "@/server/audit";
@@ -121,15 +122,25 @@ export async function setTarget(userId: string, metric: TargetMetric, dailyValue
   return target;
 }
 
+const focusCadenceSchema = z
+  .array(z.object({ day: z.number().int().min(0).max(365), channel: z.enum(["email", "linkedin", "call"]) }))
+  .min(1)
+  .max(12);
+
 export async function updateOrgSettings(patch: Partial<{
   allowedEmailDomain: string;
   assistantName: string;
   leadDailyCapDefault: number;
   aiMonthlyBudgetUsd: number;
   workingHoursDefault: { start: string; end: string; days: number[] };
+  focusCadence: { day: number; channel: "email" | "linkedin" | "call" }[];
 }>) {
   const lead = await requireRole(["lead"]);
-  await prisma.orgSettings.update({ where: { organizationId: lead.organizationId }, data: patch });
+  const focusCadence = patch.focusCadence ? focusCadenceSchema.parse(patch.focusCadence).sort((a, b) => a.day - b.day) : undefined;
+  await prisma.orgSettings.update({
+    where: { organizationId: lead.organizationId },
+    data: { ...patch, ...(focusCadence ? { focusCadence } : {}) },
+  });
   await writeAuditLog({
     organizationId: lead.organizationId,
     actorId: lead.id,
