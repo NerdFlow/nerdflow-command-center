@@ -97,8 +97,8 @@ async function main() {
     },
   });
 
-  const kbCount = await seedOutreachKb(prisma, org.id);
-  console.log(`Outreach knowledge base: ${kbCount} rows`);
+  const kb = await seedOutreachKb(prisma, org.id);
+  console.log(`Outreach knowledge base: ${kb.loaded} rows`);
 
   const seededLogins: { name: string; email: string; role: Role; password: string | null }[] = [];
 
