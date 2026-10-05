@@ -31,8 +31,9 @@ function panel(source: string | null) {
 describe("fallback draft notice", () => {
   it("says a fallback template does not count toward the daily cap", () => {
     const html = panel("fallback");
-    expect(html).toContain(FALLBACK_DRAFT_NOTICE);
-    expect(html).toContain("does not count toward today's cap");
+    expect(html).toContain("Fallback draft.");
+    expect(html).toContain("does not count toward today");
+    expect(FALLBACK_DRAFT_NOTICE).toContain("does not count toward today's cap");
   });
 
   it("stays quiet when the model returned the draft", () => {
