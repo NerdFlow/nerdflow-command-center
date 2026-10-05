@@ -125,8 +125,9 @@ jobs:
 
             # Outreach KB only. Do not run `npm run seed` here: that upserts demo users and leads.
             # tsx is a production dependency so this still runs if npm ci omits devDependencies.
-            # A failure is logged and the app still restarts. The row count is the line
-            # "Outreach knowledge base loaded: N rows ...".
+            # A failure is logged and the app still restarts. Existing rows are never
+            # overwritten. The row count is the line
+            # "Outreach knowledge base loaded: created N, skipped existing M ...".
             if npm run seed:outreach-kb; then
               echo "Outreach KB step finished"
             else

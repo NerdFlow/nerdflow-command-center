@@ -98,7 +98,7 @@ async function main() {
   });
 
   const kb = await seedOutreachKb(prisma, org.id);
-  console.log(`Outreach knowledge base: ${kb.loaded} rows`);
+  console.log(`Outreach knowledge base: created ${kb.created}, skipped existing ${kb.skipped}`);
 
   const seededLogins: { name: string; email: string; role: Role; password: string | null }[] = [];
 
