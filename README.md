@@ -85,7 +85,7 @@ Clone the repo to `/var/www/products/salesAI` on the VPS. The database is Supaba
 2. `npm ci && npx prisma migrate deploy && npm run seed && npm run build`
 3. Install `/etc/systemd/system/salesai.service` so it runs `npm run start -- --hostname 127.0.0.1 --port 3010` from that directory, then `sudo systemctl enable --now salesai`.
 
-The service listens on `127.0.0.1:3010`. Nginx proxies `sales.nerdflow.cloud` to that port. A push to `main` SSHes to the VPS, pulls, migrates, rebuilds, and restarts `salesai`. GitHub secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
+The service listens on `127.0.0.1:3010`. Nginx proxies `sales.nerdflow.cloud` to that port. A push to `main` SSHes to the VPS, pulls, migrates, refreshes outreach KB rows with `npm run seed:outreach-kb` (not the full demo seed), rebuilds, and restarts `salesai`. GitHub secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
 
 ## Docs carried over from the build kit
 
