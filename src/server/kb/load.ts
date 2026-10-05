@@ -2,7 +2,7 @@ import type { ChecklistCatalog, SafeQuote } from "@/lib/outreachChecklist";
 import { parseMailboxSignatures, type MailboxSignatureMap } from "@/lib/mailboxSignature";
 import { pktDateStamp } from "@/lib/pipelineToday";
 import { prisma } from "@/server/db";
-import { PENDING_DRAFT_MODEL } from "@/server/outreach/draftCap";
+import { outreachDraftCountsTowardCapWhere, PENDING_DRAFT_MODEL } from "@/server/outreach/draftCap";
 import type { KbContextRow } from "@/server/kb/types";
 
 export type OutreachDraftView = {
@@ -73,6 +73,7 @@ export async function loadOutreachForFocus(organizationId: string, userId: strin
   };
 }
 
+/** No in-app writer changes KB status on this branch, so a save elsewhere is visible within this window. */
 const APPROVED_KB_CACHE_MS = 60_000;
 
 const approvedKbCache = new Map<string, { at: number; entries: KbContextRow[] }>();
@@ -105,10 +106,9 @@ export async function loadApprovedKbEntries(organizationId: string): Promise<KbC
 }
 
 export async function loadOutreachUsage(organizationId: string): Promise<OutreachUsage> {
-  const [today, month, last] = await Promise.all([
+  const [today, month, last, draftsToday] = await Promise.all([
     prisma.aiUsage.aggregate({
       where: { organizationId, feature: "outreach_draft", createdAt: { gte: pktDayStart() } },
-      _count: { _all: true },
       _sum: { inputTokens: true, outputTokens: true },
     }),
     prisma.aiUsage.aggregate({
@@ -120,9 +120,10 @@ export async function loadOutreachUsage(organizationId: string): Promise<Outreac
       orderBy: { createdAt: "desc" },
       select: { latencyMs: true, model: true },
     }),
+    countDraftsToday(organizationId),
   ]);
   return {
-    draftsToday: today._count._all,
+    draftsToday,
     tokensToday: (today._sum.inputTokens ?? 0) + (today._sum.outputTokens ?? 0),
     tokensMonth: (month._sum.inputTokens ?? 0) + (month._sum.outputTokens ?? 0),
     costMonthUsd: Number(month._sum.costUsd ?? 0),
@@ -131,9 +132,16 @@ export async function loadOutreachUsage(organizationId: string): Promise<Outreac
   };
 }
 
-export async function countDraftsToday(organizationId: string): Promise<number> {
+/** Drafts the model returned, plus reservations still in flight. Failures and fallbacks are left out. */
+export async function countDraftsToday(organizationId: string, now = new Date()): Promise<number> {
+  const dayStart = pktDayStart(now);
   return prisma.aiUsage.count({
-    where: { organizationId, feature: "outreach_draft", createdAt: { gte: pktDayStart() } },
+    where: {
+      organizationId,
+      feature: "outreach_draft",
+      createdAt: { gte: dayStart },
+      ...outreachDraftCountsTowardCapWhere(dayStart, now),
+    },
   });
 }
 

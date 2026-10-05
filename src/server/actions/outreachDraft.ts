@@ -12,7 +12,8 @@ import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
 import { getKbContext, renderWriteOutreachContext } from "@/server/kb/context";
 import { countDraftsToday, loadApprovedKbEntries } from "@/server/kb/load";
-import { claimOutreachDraftSlot, releaseUnloggedDraftSlot } from "@/server/outreach/reserveDraftSlot";
+import { DRAFT_BATCH_CONCURRENCY, mapWithConcurrency, runDraftAttempt } from "@/server/outreach/draftAttempt";
+import { claimOutreachDraftSlot, outreachDraftInTransaction, refundDraftReservation } from "@/server/outreach/reserveDraftSlot";
 import { sendingMailbox } from "@/server/outreach/sendGate";
 import type { Channel } from "@prisma/client";
 
@@ -70,21 +71,6 @@ function firstName(contactName: string | null): string {
   return contactName?.trim().split(/\s+/)[0] || "there";
 }
 
-const DRAFT_BATCH_CONCURRENCY = 4;
-
-async function mapWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
-  if (items.length === 0) return;
-  let cursor = 0;
-  const run = async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      await worker(items[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()));
-}
-
 export async function generateOutreachDraft(raw: z.input<typeof cardSchema>): Promise<{ draft: SavedOutreachDraft; usedToday: number; reused: boolean }> {
   const params = cardSchema.parse(raw);
   const user = await requireUser();
@@ -101,35 +87,44 @@ export async function generateOutreachDraft(raw: z.input<typeof cardSchema>): Pr
     return { reused: true, usedToday: claim.usedToday, draft: claim.draft };
   }
 
-  let subject = "";
-  let body = "";
-  let source: "generate" | "regenerate" | "fallback" = params.mode === "regenerate" ? "regenerate" : "generate";
+  let senderName = user.fullName;
   let openerSourceUrl = claim.openerSourceUrl;
-  let reservationFinal = false;
-  try {
-    const settings = await prisma.orgSettings.findUnique({ where: { organizationId: user.organizationId } });
-    const pipeline = params.pipelineRowId
-      ? await prisma.pipelineTodayRow.findFirst({ where: { id: params.pipelineRowId, organizationId: user.organizationId } })
-      : null;
-    const mailbox = sendingMailbox({ channel: params.channel, pipeline: Boolean(pipeline), repEmail: user.email });
-    const signature = signatureForMailbox(parseMailboxSignatures(settings?.mailboxSignatures), mailbox);
-    const fact = [pipeline?.intel, Array.isArray(lead.fitReasons) ? (lead.fitReasons as string[]).join("\n") : ""]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, 1500);
-    openerSourceUrl = firstHttpUrl(claim.openerSourceUrl, lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl);
-    const strategy = lead.campaign.strategy && typeof lead.campaign.strategy === "object" ? (lead.campaign.strategy as { summary?: string }) : {};
-    const entries = await loadApprovedKbEntries(user.organizationId);
-    const kb = renderWriteOutreachContext(
-      getKbContext({
-        entries,
-        task: "write_outreach",
-        icp: icpName(lead.campaign.product.name, strategy.summary ?? ""),
-        channel: params.channel,
-      }),
-    );
-    const senderName = signature?.name || user.fullName;
-    try {
+  let savedFallback: SavedOutreachDraft | null = null;
+  const refundInput = {
+    organizationId: user.organizationId,
+    userId: user.id,
+    usageId: claim.usageId,
+    actionKey: params.actionKey,
+    mode: params.mode,
+    claimedRegenerateCount: claim.regenerateCount,
+  };
+
+  const attempt = await runDraftAttempt({
+    inTransaction: outreachDraftInTransaction,
+    claim: async () => claim,
+    callModel: async () => {
+      const settings = await prisma.orgSettings.findUnique({ where: { organizationId: user.organizationId } });
+      const pipeline = params.pipelineRowId
+        ? await prisma.pipelineTodayRow.findFirst({ where: { id: params.pipelineRowId, organizationId: user.organizationId } })
+        : null;
+      const mailbox = sendingMailbox({ channel: params.channel, pipeline: Boolean(pipeline), repEmail: user.email });
+      const signature = signatureForMailbox(parseMailboxSignatures(settings?.mailboxSignatures), mailbox);
+      senderName = signature?.name || user.fullName;
+      const fact = [pipeline?.intel, Array.isArray(lead.fitReasons) ? (lead.fitReasons as string[]).join("\n") : ""]
+        .filter(Boolean)
+        .join("\n")
+        .slice(0, 1500);
+      openerSourceUrl = firstHttpUrl(claim.openerSourceUrl, lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl);
+      const strategy = lead.campaign.strategy && typeof lead.campaign.strategy === "object" ? (lead.campaign.strategy as { summary?: string }) : {};
+      const entries = await loadApprovedKbEntries(user.organizationId);
+      const kb = renderWriteOutreachContext(
+        getKbContext({
+          entries,
+          task: "write_outreach",
+          icp: icpName(lead.campaign.product.name, strategy.summary ?? ""),
+          channel: params.channel,
+        }),
+      );
       const drafted = await callClaudeJSON({
         feature: "outreach_draft",
         model: process.env.AI_MODEL_FAST,
@@ -154,27 +149,37 @@ export async function generateOutreachDraft(raw: z.input<typeof cardSchema>): Pr
         taskType: params.mode === "regenerate" ? "regenerate" : "generate",
         usageId: claim.usageId,
       });
-      subject = drafted.subject.trim();
-      body = drafted.body.trim();
-      reservationFinal = true;
-    } catch (err) {
-      if (!(err instanceof AiUnavailableError)) throw err;
-      reservationFinal = err.logged;
-      if (!err.logged) await releaseUnloggedDraftSlot(claim.usageId);
+      return { subject: drafted.subject.trim(), body: drafted.body.trim() };
+    },
+    onSoftFailure: async () => {
       const fallback = fallbackOutreachDraft({
         channel: params.channel,
         firstName: firstName(lead.contactName),
         company: lead.businessName,
         senderName,
       });
-      subject = fallback.subject;
-      body = fallback.body;
-      source = "fallback";
-      reservationFinal = true;
-    }
-  } catch (err) {
-    if (!reservationFinal) await releaseUnloggedDraftSlot(claim.usageId);
-    throw err;
+      savedFallback = await refundDraftReservation({
+        ...refundInput,
+        fallback: {
+          leadId: lead.id,
+          pipelineRowId: params.pipelineRowId ?? null,
+          channel: params.channel as Channel,
+          subject: fallback.subject,
+          body: fallback.body,
+          openerSourceUrl,
+        },
+      });
+    },
+    onHardFailure: async () => {
+      await refundDraftReservation(refundInput);
+    },
+    isSoftFailure: (err) => err instanceof AiUnavailableError,
+  });
+
+  if (attempt.outcome === "fallback") {
+    if (!savedFallback) throw new Error("Couldn't write a fallback draft.");
+    revalidatePath("/focus");
+    return { reused: false, usedToday: await countDraftsToday(user.organizationId), draft: savedFallback };
   }
 
   const saved = await prisma.outreachDraft.upsert({
@@ -186,18 +191,18 @@ export async function generateOutreachDraft(raw: z.input<typeof cardSchema>): Pr
       actionKey: params.actionKey,
       pipelineRowId: params.pipelineRowId ?? null,
       channel: params.channel as Channel,
-      subject,
-      body,
+      subject: attempt.value.subject,
+      body: attempt.value.body,
       openerSourceUrl,
       regenerateCount: claim.regenerateCount,
-      source,
+      source: params.mode === "regenerate" ? "regenerate" : "generate",
     },
     update: {
-      subject,
-      body,
+      subject: attempt.value.subject,
+      body: attempt.value.body,
       openerSourceUrl,
       regenerateCount: claim.regenerateCount,
-      source,
+      source: params.mode === "regenerate" ? "regenerate" : "generate",
       userId: user.id,
       pipelineRowId: params.pipelineRowId ?? null,
     },

@@ -33,6 +33,7 @@ export type OutreachDraftCopy = {
   body: string;
   regenerateCount: number;
   openerSourceUrl: string | null;
+  source: string;
 };
 
 export type OutreachSessionProps = {
@@ -126,6 +127,7 @@ export function ShapeASession({
   const [draftBody, setDraftBody] = useState("");
   const [openerUrl, setOpenerUrl] = useState("");
   const [regenCount, setRegenCount] = useState(0);
+  const [draftSource, setDraftSource] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const copyRef = useRef({ body: "", subject: "", opener: "", blocked: false });
@@ -188,6 +190,7 @@ export function ShapeASession({
     setDraftBody(baseBody);
     setOpenerUrl(saved?.openerSourceUrl || firstHttpUrl(current.card.lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl) || "");
     setRegenCount(saved?.regenerateCount ?? 0);
+    setDraftSource(saved?.source ?? null);
     setDraftSaved(Boolean(saved));
     setDraftBusy(false);
     // Reset only when the card changes. Typing must not re-seed the fields.
@@ -533,6 +536,7 @@ export function ShapeASession({
               review={outreachReview}
               saved={draftSaved}
               regenerateCount={regenCount}
+              source={draftSource}
               killSwitch={outreach.killSwitch}
               capReached={outreach.usedToday >= outreach.dailyCap}
               busy={draftBusy}
@@ -548,6 +552,7 @@ export function ShapeASession({
                     setDraftBody(draft.body);
                     setOpenerUrl(draft.openerSourceUrl || openerUrl);
                     setRegenCount(draft.regenerateCount);
+                    setDraftSource(draft.source);
                     setDraftSaved(true);
                   })
                   .finally(() => setDraftBusy(false));
@@ -561,6 +566,7 @@ export function ShapeASession({
                     setDraftBody(draft.body);
                     setOpenerUrl(draft.openerSourceUrl || openerUrl);
                     setRegenCount(draft.regenerateCount);
+                    setDraftSource(draft.source);
                     setDraftSaved(true);
                   })
                   .finally(() => setDraftBusy(false));
