@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { KnowledgeEditor } from "@/components/KnowledgeEditor";
-import { canEditOutreachKb, formatKbWhen, isLockedProductTruth, KB_LAYER_LABEL, type KbLayerName, type KbScopeName, type KbStatusName } from "@/lib/outreachKb";
+import { canEditOutreachKb, formatKbWhen, isLockedProductTruth, kbKindLabel, type KbLayerName, type KbScopeName, type KbStatusName } from "@/lib/outreachKb";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/db";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default async function KnowledgeEntryPage({ params }: { params: { id: string } }) {
   const user = await requireUser();
@@ -16,15 +16,16 @@ export default async function KnowledgeEntryPage({ params }: { params: { id: str
   });
   if (!row) notFound();
   const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? (row.payload as Record<string, unknown>) : {};
+  const locked = isLockedProductTruth(row.payload);
 
   return (
     <div className="space-y-4">
       <Link href="/knowledge" className="text-sm text-muted">
         Back to Knowledge
       </Link>
-      <div>
-        <p className="text-sm text-muted m-0 mb-1">{KB_LAYER_LABEL[row.layer]}</p>
-        <h1 className="text-[28px] tracking-tight m-0">{row.title}</h1>
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="text-lg tracking-tight m-0">{kbKindLabel(row.kind)}</h1>
+        {locked && <span className="text-xs rounded-full px-2 py-0.5 bg-warm-soft text-warm">Locked</span>}
       </div>
       <KnowledgeEditor
         canEdit={canEditOutreachKb(user.role)}
@@ -39,7 +40,7 @@ export default async function KnowledgeEntryPage({ params }: { params: { id: str
           title: row.title,
           body: row.body,
           payload,
-          locked: isLockedProductTruth(row.payload),
+          locked,
           sourcePath: row.sourcePath,
           updatedLabel: formatKbWhen(row.updatedAt),
           updatedByName: row.updatedBy?.fullName ?? null,

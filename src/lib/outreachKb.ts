@@ -19,6 +19,52 @@ export const KB_LAYER_LABEL: Record<KbLayerName, string> = {
   icp: "ICP",
 };
 
+export const KB_KIND_LABEL: Record<string, string> = {
+  principle: "Principle",
+  banned_phrase: "Phrase to avoid",
+  prospect_language: "How buyers talk",
+  buyer_profile: "Buyer",
+  competitor: "Competitor",
+  objection: "Objection",
+  buying_signal: "Buying signal",
+  market_fact: "Market fact",
+  proof: "Proof",
+  message_version: "Message",
+  learning: "Learning",
+  icp_template: "Who we sell to",
+  product_truth: "Product truth",
+};
+
+export function kbKindLabel(kind: string): string {
+  return KB_KIND_LABEL[kind] ?? kind.replace(/_/g, " ");
+}
+
+/** Default editor choices. Pending stays available only when a row already has it. */
+export const KB_SIMPLE_STATUSES: KbStatusName[] = ["draft", "approved", "retired"];
+
+export function knowledgePayloadOnSave(
+  original: Record<string, unknown>,
+  plain: { claim?: string | null; safeToQuote?: boolean | null; doNotQuote?: boolean | null },
+  advancedJson: string | null,
+): { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
+  if (advancedJson !== null) {
+    try {
+      const value = JSON.parse(advancedJson) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return { ok: false, error: "Technical fields must be a JSON object." };
+      }
+      return { ok: true, payload: value as Record<string, unknown> };
+    } catch {
+      return { ok: false, error: "Technical fields are not valid JSON." };
+    }
+  }
+  const payload = { ...original };
+  if (typeof plain.claim === "string" && "claim" in original) payload.claim = plain.claim;
+  if (typeof plain.safeToQuote === "boolean" && "safeToQuote" in original) payload.safeToQuote = plain.safeToQuote;
+  if (typeof plain.doNotQuote === "boolean" && "doNotQuote" in original) payload.doNotQuote = plain.doNotQuote;
+  return { ok: true, payload };
+}
+
 const PAGE_SIZE = 40;
 
 export type KbListFilters = {

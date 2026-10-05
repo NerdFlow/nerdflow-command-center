@@ -11,6 +11,7 @@ import {
   formatKbWhen,
   isLockedProductTruth,
   kbFilterHref,
+  kbKindLabel,
   kbPageSize,
   parseKbListFilters,
   type KbStatusName,
@@ -66,9 +67,9 @@ export default async function KnowledgePage({
         <div>
           <h1 className="text-[28px] tracking-tight mb-1.5">Knowledge</h1>
           <p className="text-muted m-0">
-            {total} {total === 1 ? "row" : "rows"}. Generate only reads <span className="text-go font-medium">Approved</span>.{" "}
+            {total} {total === 1 ? "row" : "rows"}. Outreach only uses rows marked <span className="text-go font-medium">Approved</span>.{" "}
             <Link href="/knowledge?kind=product_truth" className="text-warm">
-              Locked product truth
+              Product truth
             </Link>
           </p>
         </div>
@@ -81,93 +82,112 @@ export default async function KnowledgePage({
         )}
       </div>
 
-      <form method="get" className="grid sm:grid-cols-2 lg:grid-cols-6 gap-2 items-end">
-        <label className="text-sm">
-          Layer
-          <select name="layer" defaultValue={filters.layer} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
-            <option value="">All</option>
-            {KB_LAYERS.map((layer) => (
-              <option key={layer} value={layer}>
-                {KB_LAYER_LABEL[layer]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm">
-          Kind
-          <select name="kind" defaultValue={filters.kind} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
-            <option value="">All</option>
-            {kinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {kind}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm">
-          ICP
-          <select name="icp" defaultValue={filters.icp} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
-            <option value="">All</option>
-            <option value="universal">Universal</option>
-            {icps.map((icp) => (
-              <option key={icp} value={icp}>
-                {icp}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm">
-          Status
-          <select name="status" defaultValue={filters.status} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
-            <option value="">All</option>
-            {KB_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {KB_STATUS_LABEL[status]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm lg:col-span-2">
-          Search
-          <input name="q" defaultValue={filters.q} placeholder="Title, body, or key" className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1" />
-        </label>
-        <div className="flex gap-3 sm:col-span-2 lg:col-span-6">
+      <form method="get" className="space-y-3">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
+          <label className="text-sm sm:col-span-2 lg:col-span-1">
+            Search
+            <input name="q" defaultValue={filters.q} placeholder="Search titles and text" className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1" />
+          </label>
+          <label className="text-sm">
+            Type
+            <select name="kind" defaultValue={filters.kind} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
+              <option value="">All</option>
+              {kinds.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kbKindLabel(kind)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Status
+            <select name="status" defaultValue={filters.status} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
+              <option value="">All</option>
+              {KB_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {KB_STATUS_LABEL[status]}
+                </option>
+              ))}
+            </select>
+          </label>
           <button type="submit" className="bg-accent border border-accent text-on-accent font-semibold px-3.5 py-2 rounded-xl text-sm">
             Filter
           </button>
-          <Link href="/knowledge" className="text-sm text-muted self-center">
+        </div>
+        <details open={Boolean(filters.layer || filters.icp)} className="text-sm">
+          <summary className="cursor-pointer text-muted w-fit">More filters</summary>
+          <div className="grid sm:grid-cols-2 gap-2 mt-2 max-w-xl">
+            <label>
+              Layer
+              <select name="layer" defaultValue={filters.layer} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
+                <option value="">All</option>
+                {KB_LAYERS.map((layer) => (
+                  <option key={layer} value={layer}>
+                    {KB_LAYER_LABEL[layer]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              ICP
+              <select name="icp" defaultValue={filters.icp} className="w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1">
+                <option value="">All</option>
+                <option value="universal">Universal</option>
+                {icps.map((icp) => (
+                  <option key={icp} value={icp}>
+                    {icp}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </details>
+        {(filters.q || filters.kind || filters.status || filters.layer || filters.icp) && (
+          <Link href="/knowledge" className="text-sm text-muted inline-block">
             Clear
           </Link>
-        </div>
+        )}
       </form>
 
       <div className="border border-rule rounded-card overflow-hidden bg-panel">
         {rows.length === 0 ? (
           <p className="text-sm text-muted px-4 py-6 m-0">No rows match these filters.</p>
         ) : (
-          <ul className="divide-y divide-rule m-0 p-0 list-none">
-            {rows.map((row) => {
-              const locked = isLockedProductTruth(row.payload);
-              return (
-                <li key={row.id}>
-                  <Link href={`/knowledge/${row.id}`} className="block px-4 py-3 hover:bg-panel2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{row.title}</span>
-                      <StatusChip status={row.status} />
-                      {locked && <span className="text-xs rounded-full px-2 py-0.5 bg-warm-soft text-warm">Locked</span>}
-                    </div>
-                    <p className="text-sm text-muted m-0 mt-1">
-                      {KB_LAYER_LABEL[row.layer]} · {row.kind}
-                      {row.icp ? ` · ${row.icp}` : " · universal"}
-                      {" · "}
-                      {row.updatedBy?.fullName ? `Edited by ${row.updatedBy.fullName}` : "Not edited since import"}
-                      {` · ${formatKbWhen(row.updatedAt)}`}
-                    </p>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-muted">
+                  <th className="text-left font-medium px-4 py-2">Title</th>
+                  <th className="text-left font-medium px-4 py-2">Type</th>
+                  <th className="text-left font-medium px-4 py-2">Status</th>
+                  <th className="text-left font-medium px-4 py-2">Last edited</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const locked = isLockedProductTruth(row.payload);
+                  return (
+                    <tr key={row.id} className="border-t border-rule hover:bg-panel2">
+                      <td className="px-4 py-3 align-top">
+                        <Link href={`/knowledge/${row.id}`} className="font-medium">
+                          {row.title}
+                        </Link>
+                        {locked && <span className="ml-2 text-xs rounded-full px-2 py-0.5 bg-warm-soft text-warm">Locked</span>}
+                      </td>
+                      <td className="px-4 py-3 align-top text-muted">{kbKindLabel(row.kind)}</td>
+                      <td className="px-4 py-3 align-top">
+                        <StatusChip status={row.status} />
+                      </td>
+                      <td className="px-4 py-3 align-top text-muted whitespace-nowrap">
+                        {formatKbWhen(row.updatedAt)}
+                        {row.updatedBy?.fullName ? <span className="block text-xs">by {row.updatedBy.fullName}</span> : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

@@ -14,7 +14,7 @@ export default async function NewKnowledgePage() {
       </Link>
       <div>
         <h1 className="text-[28px] tracking-tight mb-1.5">Add a knowledge row</h1>
-        <p className="text-muted m-0">New rows start out of Generate until a manager marks them Approved.</p>
+        <p className="text-muted m-0">Write the title and the text. It stays a draft until you mark it Approved.</p>
       </div>
       {canEdit ? (
         <KnowledgeEditor
