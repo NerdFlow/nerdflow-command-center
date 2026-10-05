@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Utility classes set display and override the browser rule that hides a closed details element. */
+details:not([open]) > :not(summary) {
+  display: none;
+}
+
 /*
  * NerdFlow brand tokens — match nerdflow.tech (--nf-*).
  * Dark-first. Light via [data-theme="light"] using the kit’s off-white / primary-dark values.
