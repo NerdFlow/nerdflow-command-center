@@ -106,6 +106,7 @@ export async function createOutreachKbEntry(raw: z.input<typeof createSchema>) {
   const input = createSchema.parse(raw);
   assertLock(input.payload, input.confirmLocked);
   const icp = normalizeIcp(input.scope, input.icp);
+  // A new row is always a draft. Status on the request is ignored so a lead cannot approve it in the same step.
   try {
     const saved = await prisma.outreachKbEntry.create({
       data: {
@@ -114,7 +115,7 @@ export async function createOutreachKbEntry(raw: z.input<typeof createSchema>) {
         title: input.title,
         body: input.body,
         payload: input.payload as Prisma.InputJsonValue,
-        status: input.status,
+        status: "draft",
         layer: input.layer,
         kind: input.kind,
         scope: input.scope,

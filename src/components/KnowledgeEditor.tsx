@@ -76,7 +76,7 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
     };
     try {
       if (creating) {
-        const saved = await createOutreachKbEntry({ ...common, key });
+        const saved = await createOutreachKbEntry({ ...common, key, status: "draft" });
         toast("Row added.");
         router.push(`/knowledge/${saved.id}`);
         router.refresh();
@@ -151,16 +151,23 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
               ))}
             </select>
           </label>
-          <label className="text-sm">
-            Status
-            <select className={inputClass} value={status} disabled={!canEdit} onChange={(e) => setStatus(e.target.value as KbStatusName)}>
-              {KB_STATUSES.map((item) => (
-                <option key={item} value={item}>
-                  {KB_STATUS_LABEL[item]}
-                </option>
-              ))}
-            </select>
-          </label>
+          {creating ? (
+            <p className="text-sm m-0">
+              Status
+              <span className="block mt-1 rounded-lg border border-rule bg-panel2 px-3 py-2 text-ink">Draft. Approve it after you save.</span>
+            </p>
+          ) : (
+            <label className="text-sm">
+              Status
+              <select className={inputClass} value={status} disabled={!canEdit} onChange={(e) => setStatus(e.target.value as KbStatusName)}>
+                {KB_STATUSES.map((item) => (
+                  <option key={item} value={item}>
+                    {KB_STATUS_LABEL[item]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="text-sm">
             Scope
             <select className={inputClass} value={scope} disabled={!canEdit} onChange={(e) => setScope(e.target.value as KbScopeName)}>

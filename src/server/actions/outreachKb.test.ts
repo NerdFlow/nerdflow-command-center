@@ -145,11 +145,13 @@ describe("outreach KB edit permissions", () => {
     expect(state.audits.map((item) => item.action)).toEqual(["kb_archived"]);
   });
 
-  it("lets a manager add a row", async () => {
+  it("stores a new row as draft even when the request says approved", async () => {
     actor.role = "lead";
-    const created = await createOutreachKbEntry({ ...edit, key: "learning:week-1", status: "draft" });
+    const created = await createOutreachKbEntry({ ...edit, key: "learning:week-1", status: "approved" });
     expect(created.id).toBeTruthy();
-    expect(state.rows.some((row) => row.key === "learning:week-1" && row.status === "draft" && row.updatedById === "user-1")).toBe(true);
+    const row = state.rows.find((item) => item.key === "learning:week-1");
+    expect(row?.status).toBe("draft");
+    expect(row?.updatedById).toBe("user-1");
     expect(state.deletes).toBe(0);
   });
 });
