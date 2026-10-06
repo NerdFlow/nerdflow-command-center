@@ -1,6 +1,6 @@
 /**
  * Pre-send checklist for Focus email and LinkedIn cards.
- * Failures are exact sentences the card shows. Blocks stop copy, Titan, and Done.
+ * Failures are exact sentences the card shows. Blocks disable copy, Titan, and Done.
  * Postal address, opt-out, and mailbox signature only block after Settings has a value.
  */
 

@@ -9,6 +9,9 @@ import {
   type ChecklistResult,
 } from "@/lib/outreachChecklist";
 
+export const FALLBACK_DRAFT_NOTICE =
+  "Fallback draft. The model didn't return one, so this template does not count toward today's cap.";
+
 export function reviewOutreachCopy(input: {
   channel: "email" | "linkedin";
   kind: string;
@@ -52,6 +55,7 @@ export function OutreachDraftPanel({
   review,
   saved,
   regenerateCount,
+  source,
   killSwitch,
   capReached,
   busy,
@@ -68,6 +72,7 @@ export function OutreachDraftPanel({
   review: ChecklistResult;
   saved: boolean;
   regenerateCount: number;
+  source: string | null;
   killSwitch: boolean;
   capReached: boolean;
   busy: boolean;
@@ -86,6 +91,7 @@ export function OutreachDraftPanel({
 
   return (
     <div className="space-y-3">
+      {source === "fallback" && <p className="text-sm text-muted m-0">{FALLBACK_DRAFT_NOTICE}</p>}
       {review.blocks.length > 0 && (
         <div className="bg-stop-soft border border-stop/30 rounded-xl px-4 py-3 space-y-1">
           <p className="text-sm font-semibold text-stop m-0">Fix before sending</p>

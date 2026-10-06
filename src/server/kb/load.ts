@@ -2,6 +2,7 @@ import type { ChecklistCatalog, SafeQuote } from "@/lib/outreachChecklist";
 import { parseMailboxSignatures, type MailboxSignatureMap } from "@/lib/mailboxSignature";
 import { pktDateStamp } from "@/lib/pipelineToday";
 import { prisma } from "@/server/db";
+import { outreachDraftCountsTowardCapWhere, PENDING_DRAFT_MODEL } from "@/server/outreach/draftCap";
 import type { KbContextRow } from "@/server/kb/types";
 
 export type OutreachDraftView = {
@@ -17,6 +18,8 @@ export type OutreachUsage = {
   tokensToday: number;
   tokensMonth: number;
   costMonthUsd: number;
+  lastDraftLatencyMs: number | null;
+  lastDraftModel: string | null;
 };
 
 export type OutreachFocusData = {
@@ -70,9 +73,22 @@ export async function loadOutreachForFocus(organizationId: string, userId: strin
   };
 }
 
+/** No in-app writer changes KB status on this branch, so a save elsewhere is visible within this window. */
+const APPROVED_KB_CACHE_MS = 60_000;
+
+const approvedKbCache = new Map<string, { at: number; entries: KbContextRow[] }>();
+
+export function clearApprovedKbCache(organizationId?: string): void {
+  if (organizationId) approvedKbCache.delete(organizationId);
+  else approvedKbCache.clear();
+}
+
+/** Approved rows for one org. A short cache so a batch does not reload the pack on every card. */
 export async function loadApprovedKbEntries(organizationId: string): Promise<KbContextRow[]> {
+  const cached = approvedKbCache.get(organizationId);
+  if (cached && Date.now() - cached.at < APPROVED_KB_CACHE_MS) return cached.entries;
   const rows = await prisma.outreachKbEntry.findMany({ where: { organizationId, status: "approved" } });
-  return rows.map((row) => ({
+  const entries = rows.map((row) => ({
     key: row.key,
     layer: row.layer,
     kind: row.kind,
@@ -85,31 +101,47 @@ export async function loadApprovedKbEntries(organizationId: string): Promise<KbC
     sourcePath: row.sourcePath,
     version: row.version,
   }));
+  approvedKbCache.set(organizationId, { at: Date.now(), entries });
+  return entries;
 }
 
 export async function loadOutreachUsage(organizationId: string): Promise<OutreachUsage> {
-  const [today, month] = await Promise.all([
+  const [today, month, last, draftsToday] = await Promise.all([
     prisma.aiUsage.aggregate({
       where: { organizationId, feature: "outreach_draft", createdAt: { gte: pktDayStart() } },
-      _count: { _all: true },
       _sum: { inputTokens: true, outputTokens: true },
     }),
     prisma.aiUsage.aggregate({
       where: { organizationId, feature: "outreach_draft", createdAt: { gte: monthStartUtc() } },
       _sum: { inputTokens: true, outputTokens: true, costUsd: true },
     }),
+    prisma.aiUsage.findFirst({
+      where: { organizationId, feature: "outreach_draft", model: { not: PENDING_DRAFT_MODEL } },
+      orderBy: { createdAt: "desc" },
+      select: { latencyMs: true, model: true },
+    }),
+    countDraftsToday(organizationId),
   ]);
   return {
-    draftsToday: today._count._all,
+    draftsToday,
     tokensToday: (today._sum.inputTokens ?? 0) + (today._sum.outputTokens ?? 0),
     tokensMonth: (month._sum.inputTokens ?? 0) + (month._sum.outputTokens ?? 0),
     costMonthUsd: Number(month._sum.costUsd ?? 0),
+    lastDraftLatencyMs: last?.latencyMs ?? null,
+    lastDraftModel: last?.model ?? null,
   };
 }
 
-export async function countDraftsToday(organizationId: string): Promise<number> {
+/** Drafts the model returned, plus reservations still in flight. Failures and fallbacks are left out. */
+export async function countDraftsToday(organizationId: string, now = new Date()): Promise<number> {
+  const dayStart = pktDayStart(now);
   return prisma.aiUsage.count({
-    where: { organizationId, feature: "outreach_draft", createdAt: { gte: pktDayStart() } },
+    where: {
+      organizationId,
+      feature: "outreach_draft",
+      createdAt: { gte: dayStart },
+      ...outreachDraftCountsTowardCapWhere(dayStart, now),
+    },
   });
 }
 

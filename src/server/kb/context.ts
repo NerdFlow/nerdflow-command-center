@@ -33,6 +33,70 @@ export function renderKbContext(rows: KbContextRow[], maxChars = 14000): string 
   return parts.join("\n");
 }
 
+/** Draft prompts stay small. Locked product truth is never cut, even when it is the only thing that fits. */
+export const WRITE_OUTREACH_MAX_CHARS = 6000;
+
+const PRINCIPLE_SUMMARY_CHARS = 240;
+
+/**
+ * What a draft needs, in order: full product truth, matching message versions,
+ * banned phrases, then a short summary of each principle. Other KB kinds stay out.
+ */
+export function renderWriteOutreachContext(rows: KbContextRow[], maxChars = WRITE_OUTREACH_MAX_CHARS): string {
+  const truth = rows.filter((row) => row.kind === "product_truth").sort((a, b) => a.key.localeCompare(b.key));
+  const messages = rows.filter((row) => row.kind === "message_version").sort((a, b) => a.key.localeCompare(b.key));
+  const banned = rows.filter((row) => row.kind === "banned_phrase").sort((a, b) => a.title.localeCompare(b.title));
+  const principles = rows
+    .filter((row) => row.kind === "principle" || row.kind === "learning")
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  const parts = truth.map((row) => formatKbChunk(row.kind, row.title, row.body));
+
+  for (const row of messages) {
+    const chunk = formatKbChunk(row.kind, row.title, row.body);
+    if (fits(parts, chunk, maxChars)) parts.push(chunk);
+  }
+
+  const bannedLines = ["## banned_phrase"];
+  for (const row of banned) {
+    const phrase = row.body.replace(/\s+/g, " ").trim();
+    if (!phrase) continue;
+    const candidate = bannedLines.concat(`- ${phrase}`).join("\n");
+    if (!fits(parts, candidate, maxChars)) break;
+    bannedLines.push(`- ${phrase}`);
+  }
+  if (bannedLines.length > 1) parts.push(bannedLines.join("\n"));
+
+  for (const row of principles) {
+    const chunk = formatKbChunk(row.kind, row.title, summarizeKbBody(row.body, PRINCIPLE_SUMMARY_CHARS));
+    if (fits(parts, chunk, maxChars)) parts.push(chunk);
+  }
+
+  return parts.join("\n");
+}
+
+function formatKbChunk(kind: string, title: string, body: string): string {
+  return `## ${kind}: ${title}\n${body.trim()}`;
+}
+
+function joinedLength(parts: string[]): number {
+  return parts.reduce((sum, part, index) => sum + part.length + (index > 0 ? 1 : 0), 0);
+}
+
+function fits(parts: string[], chunk: string, maxChars: number): boolean {
+  const next = parts.length === 0 ? chunk.length : joinedLength(parts) + 1 + chunk.length;
+  return next <= maxChars;
+}
+
+function summarizeKbBody(body: string, max: number): string {
+  const flat = body.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const slice = flat.slice(0, max);
+  const stop = slice.lastIndexOf(". ");
+  const cut = stop >= 80 ? slice.slice(0, stop + 1) : slice.trimEnd();
+  return `${cut}…`;
+}
+
 function icpMatches(entry: KbContextRow, icp: string | null): boolean {
   if (entry.scope === "universal" || !entry.icp) return true;
   if (!icp) return false;
