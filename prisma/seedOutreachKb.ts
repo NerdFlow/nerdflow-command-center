@@ -23,26 +23,29 @@ export async function seedOutreachKb(prisma: PrismaClient, organizationId: strin
   });
   const plan = planOutreachKbSync(existing, entries);
 
-  if (plan.create.length > 0) {
-    await prisma.outreachKbEntry.createMany({
-      skipDuplicates: true,
-      data: plan.create.map((entry) => ({
-        organizationId,
-        layer: entry.layer,
-        kind: entry.kind,
-        icp: entry.icp,
-        scope: entry.scope,
-        status: entry.status,
-        key: entry.key,
-        title: entry.title,
-        body: entry.body,
-        payload: entry.payload as Prisma.InputJsonValue,
-        sourcePath: entry.sourcePath,
-        sourceLink: entry.sourceLink,
-        version: entry.version,
-      })),
-    });
-  }
+  const inserted =
+    plan.create.length === 0
+      ? 0
+      : (
+          await prisma.outreachKbEntry.createMany({
+            skipDuplicates: true,
+            data: plan.create.map((entry) => ({
+              organizationId,
+              layer: entry.layer,
+              kind: entry.kind,
+              icp: entry.icp,
+              scope: entry.scope,
+              status: entry.status,
+              key: entry.key,
+              title: entry.title,
+              body: entry.body,
+              payload: entry.payload as Prisma.InputJsonValue,
+              sourcePath: entry.sourcePath,
+              sourceLink: entry.sourceLink,
+              version: entry.version,
+            })),
+          })
+        ).count;
 
-  return outreachKbLoadResult(plan);
+  return outreachKbLoadResult(plan, inserted);
 }

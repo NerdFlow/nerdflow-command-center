@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { seedOutreachKb } from "../../../prisma/seedOutreachKb";
 
-function fakeClient(keys: string[]) {
+function fakeClient(keys: string[], inserted?: number) {
   const created: { key: string; body: string; title: string; status: string }[] = [];
   let updates = 0;
   let deletes = 0;
@@ -13,7 +13,7 @@ function fakeClient(keys: string[]) {
       createMany: async ({ data, skipDuplicates: skip }: { data: { key: string; body: string; title: string; status: string }[]; skipDuplicates?: boolean }) => {
         skipDuplicates = skip === true;
         created.push(...data);
-        return { count: data.length };
+        return { count: inserted ?? data.length };
       },
       update: async () => {
         updates += 1;
@@ -55,5 +55,12 @@ describe("seedOutreachKb", () => {
     expect(again).toEqual({ created: 0, skipped: seeded.created });
     expect(second.created).toEqual([]);
     expect(second.counts()).toEqual({ updates: 0, deletes: 0 });
+  });
+
+  it("reports created from the number of rows the database inserted", async () => {
+    const db = fakeClient(["product_truth:one_liner"], 4);
+    const result = await seedOutreachKb(db.prisma, "org-1");
+    expect(result.created).toBe(4);
+    expect(result.skipped).toBe(1 + db.created.length - 4);
   });
 });

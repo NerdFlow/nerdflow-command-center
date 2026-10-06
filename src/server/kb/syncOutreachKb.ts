@@ -64,8 +64,8 @@ export function planOutreachKbSync(existing: ExistingKbRow[], incoming: KbSeedEn
   return { create, skipped };
 }
 
-export function outreachKbLoadResult(plan: KbSyncPlan): OutreachKbLoadResult {
-  return { created: plan.create.length, skipped: plan.skipped };
+export function outreachKbLoadResult(plan: KbSyncPlan, inserted = plan.create.length): OutreachKbLoadResult {
+  return { created: inserted, skipped: plan.skipped + (plan.create.length - inserted) };
 }
 
 export function formatOutreachKbLoadLine(org: OrgChoice, result: OutreachKbLoadResult): string {

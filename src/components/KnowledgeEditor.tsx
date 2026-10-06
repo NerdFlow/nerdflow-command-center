@@ -11,6 +11,7 @@ import {
   KB_SCOPES,
   KB_SIMPLE_STATUSES,
   KB_STATUS_LABEL,
+  changedPlainFields,
   kbKindLabel,
   knowledgePayloadOnSave,
   type KbLayerName,
@@ -97,9 +98,14 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
       scope,
       icp: scope === "icp" ? icp : null,
       confirmLocked,
-      ...(typeof claim === "string" ? { claim } : {}),
-      ...(typeof safeToQuote === "boolean" ? { safeToQuote } : {}),
-      ...(typeof doNotQuote === "boolean" ? { doNotQuote } : {}),
+      ...changedPlainFields(
+        {
+          claim: typeof row.payload.claim === "string" ? row.payload.claim : null,
+          safeToQuote: typeof row.payload.safeToQuote === "boolean" ? row.payload.safeToQuote : null,
+          doNotQuote: typeof row.payload.doNotQuote === "boolean" ? row.payload.doNotQuote : null,
+        },
+        { claim, safeToQuote, doNotQuote },
+      ),
       ...(advancedPayload?.ok ? { payload: advancedPayload.payload } : {}),
     };
     try {

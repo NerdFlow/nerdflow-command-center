@@ -68,6 +68,16 @@ function normalizeIcp(scope: z.infer<typeof scopeSchema>, icp: string | null): s
   return value;
 }
 
+const staleRowMessage = "This row was changed by someone else, reload to see it";
+
+async function auditAfterSave(params: Parameters<typeof writeAuditLog>[0]) {
+  try {
+    await writeAuditLog(params);
+  } catch (err) {
+    console.error("[knowledge] audit log failed", err instanceof Error ? err.message : "error");
+  }
+}
+
 export async function updateOutreachKbEntry(raw: z.input<typeof updateSchema>) {
   const user = await requireUser();
   assertEditor(user.role);
@@ -78,13 +88,12 @@ export async function updateOutreachKbEntry(raw: z.input<typeof updateSchema>) {
       where: { id: input.id, organizationId: user.organizationId },
     });
     if (!fresh) throw new Error("That row is not in this organization.");
-    if (fresh.version !== input.version) throw new Error("This row was changed by someone else, reload to see it");
     const payload = mergeKbPayload(fresh.payload, input);
     assertLock(fresh.payload, input.confirmLocked);
     assertLock(payload, input.confirmLocked);
     const before = { title: fresh.title, status: fresh.status, kind: fresh.kind };
-    const updated = await tx.outreachKbEntry.update({
-      where: { id: fresh.id },
+    const wrote = await tx.outreachKbEntry.updateMany({
+      where: { id: fresh.id, organizationId: user.organizationId, version: input.version },
       data: {
         title: input.title,
         body: input.body,
@@ -94,28 +103,26 @@ export async function updateOutreachKbEntry(raw: z.input<typeof updateSchema>) {
         kind: input.kind,
         scope: input.scope,
         icp,
-        version: fresh.version + 1,
+        version: { increment: 1 },
         updatedById: user.id,
       },
     });
-    return { id: updated.id, before, after: { title: updated.title, status: updated.status, kind: updated.kind } };
+    if (wrote.count === 0) throw new Error(staleRowMessage);
+    return { id: fresh.id, before, after: { title: input.title, status: input.status, kind: input.kind } };
   });
   clearApprovedKbCache(user.organizationId);
-  try {
-    await writeAuditLog({
-      organizationId: user.organizationId,
-      actorId: user.id,
-      action: "kb_updated",
-      entityType: "outreach_kb_entry",
-      entityId: saved.id,
-      before: saved.before,
-      after: saved.after,
-    });
-  } finally {
-    revalidatePath("/knowledge");
-    revalidatePath(`/knowledge/${saved.id}`);
-    revalidatePath("/focus");
-  }
+  await auditAfterSave({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "kb_updated",
+    entityType: "outreach_kb_entry",
+    entityId: saved.id,
+    before: saved.before,
+    after: saved.after,
+  });
+  revalidatePath("/knowledge");
+  revalidatePath(`/knowledge/${saved.id}`);
+  revalidatePath("/focus");
   return { id: saved.id };
 }
 
@@ -153,18 +160,15 @@ export async function createOutreachKbEntry(raw: z.input<typeof createSchema>) {
     throw err;
   }
   clearApprovedKbCache(user.organizationId);
-  try {
-    await writeAuditLog({
-      organizationId: user.organizationId,
-      actorId: user.id,
-      action: "kb_created",
-      entityType: "outreach_kb_entry",
-      entityId: saved.id,
-      after: { key: saved.key, title: saved.title, status: saved.status, kind: saved.kind },
-    });
-  } finally {
-    revalidatePath("/knowledge");
-  }
+  await auditAfterSave({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "kb_created",
+    entityType: "outreach_kb_entry",
+    entityId: saved.id,
+    after: { key: saved.key, title: saved.title, status: saved.status, kind: saved.kind },
+  });
+  revalidatePath("/knowledge");
   return { id: saved.id };
 }
 
@@ -177,26 +181,23 @@ export async function archiveOutreachKbEntry(raw: z.input<typeof archiveSchema>)
   });
   if (!row) throw new Error("That row is not in this organization.");
   assertLock(row.payload, input.confirmLocked);
-  if (row.status === "retired") return { id: row.id };
-  const saved = await prisma.outreachKbEntry.update({
-    where: { id: row.id },
-    data: { status: "retired", version: row.version + 1, updatedById: user.id },
+  const wrote = await prisma.outreachKbEntry.updateMany({
+    where: { id: row.id, organizationId: user.organizationId, status: { not: "retired" } },
+    data: { status: "retired", version: { increment: 1 }, updatedById: user.id },
   });
+  if (wrote.count === 0) return { id: row.id };
   clearApprovedKbCache(user.organizationId);
-  try {
-    await writeAuditLog({
-      organizationId: user.organizationId,
-      actorId: user.id,
-      action: "kb_archived",
-      entityType: "outreach_kb_entry",
-      entityId: saved.id,
-      before: { status: row.status },
-      after: { status: saved.status },
-    });
-  } finally {
-    revalidatePath("/knowledge");
-    revalidatePath(`/knowledge/${saved.id}`);
-    revalidatePath("/focus");
-  }
-  return { id: saved.id };
+  await auditAfterSave({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    action: "kb_archived",
+    entityType: "outreach_kb_entry",
+    entityId: row.id,
+    before: { status: row.status },
+    after: { status: "retired" },
+  });
+  revalidatePath("/knowledge");
+  revalidatePath(`/knowledge/${row.id}`);
+  revalidatePath("/focus");
+  return { id: row.id };
 }

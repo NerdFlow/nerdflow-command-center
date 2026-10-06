@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatKbWhen, kbKindLabel, kbReaderView, knowledgePayloadOnSave } from "@/lib/outreachKb";
+import { changedPlainFields, formatKbWhen, kbKindLabel, kbReaderView, knowledgePayloadOnSave } from "@/lib/outreachKb";
 
 describe("knowledgePayloadOnSave", () => {
   const original = { claim: "yes", locked: true, tasks: ["write_outreach"], safeToQuote: false };
@@ -25,6 +25,14 @@ describe("knowledgePayloadOnSave", () => {
   it("rejects technical fields that are not an object", () => {
     expect(knowledgePayloadOnSave(original, {}, "not json").ok).toBe(false);
     expect(knowledgePayloadOnSave(original, {}, "[]").ok).toBe(false);
+  });
+});
+
+describe("changedPlainFields", () => {
+  it("omits claim fields the user did not change", () => {
+    const initial = { claim: "yes", safeToQuote: false, doNotQuote: null };
+    expect(changedPlainFields(initial, initial)).toEqual({});
+    expect(changedPlainFields(initial, { ...initial, claim: "roadmap" })).toEqual({ claim: "roadmap" });
   });
 });
 

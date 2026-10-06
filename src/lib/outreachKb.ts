@@ -46,7 +46,19 @@ export function asPayloadRecord(payload: unknown): Record<string, unknown> {
   return payload && typeof payload === "object" && !Array.isArray(payload) ? { ...(payload as Record<string, unknown>) } : {};
 }
 
-/** Advanced JSON replaces the stored object. Plain claim fields are applied after that, so neither side is dropped. */
+/** Plain claim fields the user changed since the page loaded. Unchanged ones stay out so an Advanced edit of the same field is kept. */
+export function changedPlainFields(
+  initial: { claim?: string | null; safeToQuote?: boolean | null; doNotQuote?: boolean | null },
+  current: { claim?: string | null; safeToQuote?: boolean | null; doNotQuote?: boolean | null },
+): { claim?: string; safeToQuote?: boolean; doNotQuote?: boolean } {
+  const patch: { claim?: string; safeToQuote?: boolean; doNotQuote?: boolean } = {};
+  if (typeof current.claim === "string" && current.claim !== initial.claim) patch.claim = current.claim;
+  if (typeof current.safeToQuote === "boolean" && current.safeToQuote !== initial.safeToQuote) patch.safeToQuote = current.safeToQuote;
+  if (typeof current.doNotQuote === "boolean" && current.doNotQuote !== initial.doNotQuote) patch.doNotQuote = current.doNotQuote;
+  return patch;
+}
+
+/** Advanced JSON replaces the stored object. Only plain fields included in the patch are applied after that. */
 export function mergeKbPayload(
   fresh: unknown,
   patch: {

@@ -28,6 +28,7 @@ const { state } = vi.hoisted(() => ({
     deletes: 0,
     kbReads: 0,
     failAudit: false,
+    writes: [] as { where: Record<string, unknown> }[],
   },
 }));
 
@@ -37,11 +38,22 @@ vi.mock("@/server/db", () => {
   const outreachKbEntry = {
     findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
       state.rows.find((row) => row.id === where.id && row.organizationId === where.organizationId) ?? null,
-    update: async ({ where, data }: { where: { id: string }; data: Partial<Stored> }) => {
-      const row = state.rows.find((item) => item.id === where.id);
-      if (!row) throw new Error("missing");
-      Object.assign(row, data);
-      return row;
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: { id: string; organizationId: string; version?: number; status?: { not?: string } };
+      data: Record<string, unknown>;
+    }) => {
+      state.writes.push({ where });
+      const row = state.rows.find((item) => item.id === where.id && item.organizationId === where.organizationId);
+      if (!row) return { count: 0 };
+      if (typeof where.version === "number" && row.version !== where.version) return { count: 0 };
+      if (where.status?.not && row.status === where.status.not) return { count: 0 };
+      const { version, ...rest } = data;
+      Object.assign(row, rest);
+      if (version && typeof version === "object" && "increment" in version && typeof version.increment === "number") row.version += version.increment;
+      return { count: 1 };
     },
     create: async ({ data }: { data: Omit<Stored, "id"> & { id?: string } }) => {
       const row = { id: "22222222-2222-4222-8222-222222222222", ...data } as Stored;
@@ -117,6 +129,7 @@ beforeEach(() => {
   state.deletes = 0;
   state.kbReads = 0;
   state.failAudit = false;
+  state.writes = [];
   clearApprovedKbCache();
 });
 
@@ -227,12 +240,51 @@ describe("outreach KB edit permissions", () => {
     expect(state.rows[0]?.payload).toMatchObject({ locked: true, claim: "yes" });
   });
 
-  it("clears the approved cache even when the audit write throws", async () => {
+  it("guards the write with the loaded version and leaves a lost race unchanged", async () => {
+    actor.role = "lead";
+    await updateOutreachKbEntry({ ...edit, payload: undefined });
+    expect(state.writes.at(-1)?.where).toEqual({ id: rowId, organizationId: "org-1", version: 1 });
+    expect(state.rows[0]?.version).toBe(2);
+
+    state.rows[0] = sample({ version: 6, status: "retired", title: "Still archived" });
+    await expect(updateOutreachKbEntry({ ...edit, status: "approved", version: 5, payload: undefined })).rejects.toThrow(
+      "This row was changed by someone else, reload to see it",
+    );
+    expect(state.writes.at(-1)?.where).toEqual({ id: rowId, organizationId: "org-1", version: 5 });
+    expect(state.rows[0]?.status).toBe("retired");
+    expect(state.rows[0]?.title).toBe("Still archived");
+    expect(state.rows[0]?.version).toBe(6);
+  });
+
+  it("archives only a row that is not already archived", async () => {
     actor.role = "lead";
     await loadApprovedKbEntries("org-1");
+    await archiveOutreachKbEntry({ id: rowId });
+    expect(state.writes.at(-1)?.where).toEqual({ id: rowId, organizationId: "org-1", status: { not: "retired" } });
+    expect(state.rows[0]?.status).toBe("retired");
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(2);
+
+    state.writes = [];
+    state.audits = [];
+    const reads = state.kbReads;
+    await archiveOutreachKbEntry({ id: rowId });
+    expect(state.writes.at(-1)?.where).toEqual({ id: rowId, organizationId: "org-1", status: { not: "retired" } });
+    expect(state.rows[0]?.status).toBe("retired");
+    expect(state.audits).toEqual([]);
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(reads);
+  });
+
+  it("keeps a saved row when the audit write throws", async () => {
+    actor.role = "lead";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await loadApprovedKbEntries("org-1");
     state.failAudit = true;
-    await expect(updateOutreachKbEntry({ ...edit, title: "Saved anyway", payload: undefined })).rejects.toThrow("audit failed");
+    await expect(updateOutreachKbEntry({ ...edit, title: "Saved anyway", payload: undefined })).resolves.toEqual({ id: rowId });
     expect(state.rows[0]?.title).toBe("Saved anyway");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
     await loadApprovedKbEntries("org-1");
     expect(state.kbReads).toBe(2);
   });
