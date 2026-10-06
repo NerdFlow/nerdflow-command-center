@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { FocusQueueMenu } from "@/components/FocusQueueMenu";
-import { promoteQueueItem } from "@/lib/focusJump";
+import { commitQueueJump, DISCARD_DRAFT_EDITS, draftIsDirty, mayLeaveCardForJump, promoteQueueItem } from "@/lib/focusJump";
 
 const queue = [
   { key: "ada", label: "Analytical Engines" },
@@ -40,5 +40,71 @@ describe("focus queue jump", () => {
     expect(html).not.toContain("Skip");
     const options = html.match(/role="option"/g) ?? [];
     expect(options).toHaveLength(3);
+  });
+
+  it("onJump never calls skipFocusCard or any other server action", () => {
+    const calls: string[] = [];
+    const serverActions = {
+      skipFocusCard: () => calls.push("skipFocusCard"),
+      recordPipelineOutcome: () => calls.push("recordPipelineOutcome"),
+      completeTodayRow: () => calls.push("completeTodayRow"),
+      followUpTodayRow: () => calls.push("followUpTodayRow"),
+      logTouchOutcome: () => calls.push("logTouchOutcome"),
+    };
+    let jumped: string | null = "stale";
+    commitQueueJump("later", (key) => {
+      jumped = key;
+    }, serverActions);
+    expect(jumped).toBe("later");
+    expect(calls).toEqual([]);
+  });
+
+  it("asks before leaving a card with unsaved draft typing", () => {
+    const seed = { subject: "Hi", body: "Hello", opener: "https://ada.example" };
+    expect(draftIsDirty(seed, seed)).toBe(false);
+    expect(draftIsDirty({ ...seed, body: "Hello Ada" }, seed)).toBe(true);
+
+    const prompts: string[] = [];
+    const stay = mayLeaveCardForJump({
+      key: "grace",
+      currentKey: "ada",
+      dirty: true,
+      confirmDiscard: (message) => {
+        prompts.push(message);
+        return false;
+      },
+    });
+    expect(stay).toBe(false);
+    expect(prompts).toEqual([DISCARD_DRAFT_EDITS]);
+
+    const leave = mayLeaveCardForJump({
+      key: "grace",
+      currentKey: "ada",
+      dirty: true,
+      confirmDiscard: () => true,
+    });
+    expect(leave).toBe(true);
+
+    let asked = false;
+    expect(
+      mayLeaveCardForJump({
+        key: "grace",
+        currentKey: "ada",
+        dirty: false,
+        confirmDiscard: () => {
+          asked = true;
+          return false;
+        },
+      }),
+    ).toBe(true);
+    expect(asked).toBe(false);
+    expect(
+      mayLeaveCardForJump({
+        key: "ada",
+        currentKey: "ada",
+        dirty: true,
+        confirmDiscard: () => true,
+      }),
+    ).toBe(false);
   });
 });

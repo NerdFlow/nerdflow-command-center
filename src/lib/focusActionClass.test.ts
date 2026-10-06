@@ -78,16 +78,77 @@ describe("disabled focus controls", () => {
     expect(html).not.toContain("disabled");
   });
 
-  it("puts the disabled look after the primary variant so hover cannot win", () => {
+  it("resolves a disabled primary button to the muted panel style, including while hovered", () => {
     const html = renderToStaticMarkup(createElement(Btn, { variant: "primary", disabled: true }, "Save"));
-    const names = classOf(html, "button");
-    const hover = names.indexOf("hover:bg-accent-hover");
-    const disabledHover = names.indexOf("disabled:hover:bg-panel");
-    expect(hover).toBeGreaterThan(-1);
-    expect(disabledHover).toBeGreaterThan(hover);
-    expect(names).toContain("disabled:cursor-not-allowed");
-    expect(names).toContain("disabled:bg-panel");
-    expect(names).toContain("disabled:opacity-40");
     expect(html).toContain("disabled");
+    const rendered = classOf(html, "button").join(" ");
+    const hovered = computedUtilities(rendered, { disabled: true, hover: true });
+    expect(hovered.background).toBe("panel");
+    expect(hovered.cursor).toBe("not-allowed");
+    expect(hovered.opacity).toBe("40");
+    const resting = computedUtilities(rendered, { disabled: true, hover: false });
+    expect(resting.background).toBe("panel");
+    expect(resting.cursor).toBe("not-allowed");
+    expect(resting.opacity).toBe("40");
+
+    const reversed = rendered.split(/\s+/).reverse().join(" ");
+    expect(computedUtilities(reversed, { disabled: true, hover: true }).background).toBe("panel");
+
+    const variant = focusActionClass({ tone: "primary", disabled: true });
+    expect(computedUtilities(variant, { disabled: true, hover: true })).toMatchObject({
+      background: "panel",
+      cursor: "not-allowed",
+      opacity: "40",
+    });
+
+    const enabled = renderToStaticMarkup(createElement(Btn, { variant: "primary" }, "Save"));
+    expect(computedUtilities(classOf(enabled, "button").join(" "), { hover: true }).background).toBe("accent-hover");
   });
 });
+
+const PSEUDO = new Set(["hover", "disabled", "focus", "active", "focus-visible", "focus-within"]);
+
+/** Picks the winning utility by variant specificity. Class-string order is not the cascade. */
+function computedUtilities(className: string, state: { disabled?: boolean; hover?: boolean; active?: boolean; focus?: boolean }) {
+  const winners = new Map<string, { value: string; score: number; ambiguous: boolean }>();
+  for (const token of className.split(/\s+/).filter(Boolean)) {
+    const parts = token.split(":");
+    const variants: string[] = [];
+    let index = 0;
+    while (index < parts.length - 1 && PSEUDO.has(parts[index] ?? "")) {
+      variants.push(parts[index] ?? "");
+      index += 1;
+    }
+    const active = variants.every((variant) => Boolean(state[variant as keyof typeof state]));
+    if (!active) continue;
+    const utility = parts.slice(index).join(":");
+    const parsed = utility.startsWith("bg-")
+      ? { prop: "background", value: utility.slice(3) }
+      : utility.startsWith("cursor-")
+        ? { prop: "cursor", value: utility.slice("cursor-".length) }
+        : utility.startsWith("opacity-")
+          ? { prop: "opacity", value: utility.slice("opacity-".length) }
+          : null;
+    if (!parsed) continue;
+    const score = variants.length;
+    const current = winners.get(parsed.prop);
+    if (!current || score > current.score) {
+      winners.set(parsed.prop, { value: parsed.value, score, ambiguous: false });
+      continue;
+    }
+    if (score === current.score && current.value !== parsed.value) {
+      current.ambiguous = true;
+    }
+  }
+  const background = winners.get("background");
+  const cursor = winners.get("cursor");
+  const opacity = winners.get("opacity");
+  if (background?.ambiguous || cursor?.ambiguous || opacity?.ambiguous) {
+    throw new Error("Equal specificity; class order must not decide the computed style");
+  }
+  return {
+    background: background?.value,
+    cursor: cursor?.value,
+    opacity: opacity?.value,
+  };
+}

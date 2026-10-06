@@ -17,7 +17,7 @@ import { OpenInTitan } from "@/components/OpenInTitan";
 import { FocusQueueMenu } from "@/components/FocusQueueMenu";
 import { ShapeASession } from "@/components/ShapeASession";
 import { focusActionClass } from "@/lib/focusActionClass";
-import { promoteQueueItem } from "@/lib/focusJump";
+import { commitQueueJump, promoteQueueItem } from "@/lib/focusJump";
 import { titanOpenState } from "@/lib/titanOpen";
 import { TodaySyncPanel } from "@/components/TodaySyncPanel";
 import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
@@ -432,6 +432,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     if (outcome !== "skip") setTouchesLogged((n) => n + 1);
@@ -461,6 +462,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     void skipFocusCard({
@@ -492,6 +494,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     setTouchesLogged((n) => n + 1);
@@ -525,6 +528,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     setTouchesLogged((n) => n + 1);
@@ -570,6 +574,7 @@ export function FocusClient({
     const key = row.action.key;
     const leadId = row.card.lead.id;
     if (!startOptimisticOutcome(inFlight.current, key)) return;
+    setJumpedKey(null);
     const terminal = outcome === "not_fit" || outcome === "wrong_number";
     const siblingKeys = shapeRows.filter((item) => item.card.lead.id === leadId).map((item) => item.action.key);
     setHiddenKeys((prev) => Array.from(new Set([...prev, ...(terminal ? siblingKeys : [key])])));
@@ -606,6 +611,7 @@ export function FocusClient({
     const card = current;
     const leadId = card.lead.id;
     if (!startOptimisticOutcome(inFlight.current, leadId)) return;
+    setJumpedKey(null);
 
     const note = channel === "call" ? normalizeCallerNote(callNote) : null;
     const scriptUsed = opener.variant;
@@ -869,7 +875,7 @@ export function FocusClient({
           }
           outreach={{ ...outreach, drafts, usedToday, repEmail }}
           onGenerateDraft={onGenerateDraft}
-          onJump={setJumpedKey}
+          onJump={(key) => commitQueueJump(key, setJumpedKey)}
         />
         {replyDialog}
         {coachOpen && (
@@ -912,7 +918,7 @@ export function FocusClient({
             detail: card.lead.city,
           }))}
           activeKey={current?.lead.id ?? null}
-          onJump={setJumpedKey}
+          onJump={(key) => commitQueueJump(key, setJumpedKey)}
         />
         {mins !== null && (
           <span className="text-xs tabular-nums text-dim bg-panel2 px-2 py-1 rounded-md">
@@ -1161,6 +1167,7 @@ export function FocusClient({
           onCancel={() => setCallSkipOpen(false)}
           onConfirm={(detail) => {
             setCallSkipOpen(false);
+            setJumpedKey(null);
             const rowId = current.pipeline?.rowId ?? null;
             const key = rowId ? `pipeline:${rowId}` : todayActionKey(current.lead.id, "call");
             void skipFocusCard({

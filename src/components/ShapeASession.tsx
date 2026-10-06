@@ -23,6 +23,7 @@ import { FocusQueueMenu } from "@/components/FocusQueueMenu";
 import { OpenInTitan } from "@/components/OpenInTitan";
 import { OutreachDraftPanel, reviewOutreachCopy } from "@/components/OutreachDraftPanel";
 import { focusActionClass } from "@/lib/focusActionClass";
+import { draftIsDirty, mayLeaveCardForJump } from "@/lib/focusJump";
 import { titanOpenState } from "@/lib/titanOpen";
 import { checklistApplies, firstHttpUrl } from "@/lib/outreachChecklist";
 import { sendingMailbox, type MailboxSignatureMap } from "@/lib/mailboxSignature";
@@ -135,6 +136,7 @@ export function ShapeASession({
   const [draftSaved, setDraftSaved] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const copyRef = useRef({ body: "", subject: "", opener: "", blocked: false });
+  const draftSeed = useRef({ subject: "", body: "", opener: "" });
   const stack = focusSessionStacks();
 
   useEffect(() => {
@@ -190,9 +192,11 @@ export function ShapeASession({
       (current.action.kind === "reply" ? reply?.responseDraft || "" : "") ||
       emailParts?.body ||
       "";
+    const baseOpener = saved?.openerSourceUrl || firstHttpUrl(current.card.lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl) || "";
     setDraftSubject(baseSubject);
     setDraftBody(baseBody);
-    setOpenerUrl(saved?.openerSourceUrl || firstHttpUrl(current.card.lead.sourceUrl, pipeline?.intel, pipeline?.linkUrl) || "");
+    setOpenerUrl(baseOpener);
+    draftSeed.current = { subject: baseSubject, body: baseBody, opener: baseOpener };
     setRegenCount(saved?.regenerateCount ?? 0);
     setDraftSource(saved?.source ?? null);
     setDraftSaved(Boolean(saved));
@@ -271,6 +275,28 @@ export function ShapeASession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, callNote, emailParts, me, showFollowUp, showSkip, onFollowUp, askingSkip]);
 
+  function acceptGenerated(draft: OutreachDraftCopy) {
+    const opener = draft.openerSourceUrl || openerUrl;
+    setDraftSubject(draft.subject);
+    setDraftBody(draft.body);
+    setOpenerUrl(opener);
+    setRegenCount(draft.regenerateCount);
+    setDraftSource(draft.source);
+    setDraftSaved(true);
+    draftSeed.current = { subject: draft.subject, body: draft.body, opener };
+  }
+
+  function jump(key: string) {
+    const allowed = mayLeaveCardForJump({
+      key,
+      currentKey: current?.action.key ?? null,
+      dirty: draftIsDirty({ subject: draftSubject, body: draftBody, opener: openerUrl }, draftSeed.current),
+      confirmDiscard: (message) => window.confirm(message),
+    });
+    if (!allowed) return;
+    onJump(key);
+  }
+
   const mins = sessionLengthSeconds === null ? null : Math.floor(secondsLeft / 60);
   const secs = sessionLengthSeconds === null ? null : String(secondsLeft % 60).padStart(2, "0");
   const header = current
@@ -290,7 +316,7 @@ export function ShapeASession({
             detail: actionKicker(row.action.kind, row.card.pipeline?.actionLabel),
           }))}
           activeKey={current?.action.key ?? null}
-          onJump={onJump}
+          onJump={jump}
         />
       </div>
       <div className="flex items-center gap-3 md:gap-4 flex-wrap">
@@ -563,12 +589,7 @@ export function ShapeASession({
                 void onGenerateDraft(current, "generate")
                   .then((draft) => {
                     if (!draft) return;
-                    setDraftSubject(draft.subject);
-                    setDraftBody(draft.body);
-                    setOpenerUrl(draft.openerSourceUrl || openerUrl);
-                    setRegenCount(draft.regenerateCount);
-                    setDraftSource(draft.source);
-                    setDraftSaved(true);
+                    acceptGenerated(draft);
                   })
                   .finally(() => setDraftBusy(false));
               }}
@@ -577,12 +598,7 @@ export function ShapeASession({
                 void onGenerateDraft(current, "regenerate")
                   .then((draft) => {
                     if (!draft) return;
-                    setDraftSubject(draft.subject);
-                    setDraftBody(draft.body);
-                    setOpenerUrl(draft.openerSourceUrl || openerUrl);
-                    setRegenCount(draft.regenerateCount);
-                    setDraftSource(draft.source);
-                    setDraftSaved(true);
+                    acceptGenerated(draft);
                   })
                   .finally(() => setDraftBusy(false));
               }}
