@@ -15,6 +15,7 @@ import {
 import { requireUser } from "@/server/auth";
 import { writeAuditLog } from "@/server/audit";
 import { prisma } from "@/server/db";
+import { clearApprovedKbCache } from "@/server/kb/load";
 
 const payloadSchema = z.record(z.string(), z.unknown());
 
@@ -94,6 +95,7 @@ export async function updateOutreachKbEntry(raw: z.input<typeof updateSchema>) {
     before: { title: row.title, status: row.status, kind: row.kind },
     after: { title: saved.title, status: saved.status, kind: saved.kind },
   });
+  clearApprovedKbCache(user.organizationId);
   revalidatePath("/knowledge");
   revalidatePath(`/knowledge/${saved.id}`);
   revalidatePath("/focus");
@@ -133,6 +135,7 @@ export async function createOutreachKbEntry(raw: z.input<typeof createSchema>) {
       entityId: saved.id,
       after: { key: saved.key, title: saved.title, status: saved.status, kind: saved.kind },
     });
+    clearApprovedKbCache(user.organizationId);
     revalidatePath("/knowledge");
     return { id: saved.id };
   } catch (err) {
@@ -166,6 +169,7 @@ export async function archiveOutreachKbEntry(raw: z.input<typeof archiveSchema>)
     before: { status: row.status },
     after: { status: saved.status },
   });
+  clearApprovedKbCache(user.organizationId);
   revalidatePath("/knowledge");
   revalidatePath(`/knowledge/${saved.id}`);
   revalidatePath("/focus");

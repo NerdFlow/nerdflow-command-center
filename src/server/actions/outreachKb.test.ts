@@ -26,6 +26,7 @@ const { state } = vi.hoisted(() => ({
     rows: [] as Stored[],
     audits: [] as { action: string }[],
     deletes: 0,
+    kbReads: 0,
   },
 }));
 
@@ -53,6 +54,10 @@ vi.mock("@/server/db", () => ({
       deleteMany: async () => {
         state.deletes += 1;
       },
+      findMany: async () => {
+        state.kbReads += 1;
+        return [];
+      },
     },
     auditLog: {
       create: async ({ data }: { data: { action: string } }) => {
@@ -64,6 +69,7 @@ vi.mock("@/server/db", () => ({
 }));
 
 import { archiveOutreachKbEntry, createOutreachKbEntry, updateOutreachKbEntry } from "@/server/actions/outreachKb";
+import { clearApprovedKbCache, loadApprovedKbEntries } from "@/server/kb/load";
 
 function sample(overrides: Partial<Stored> = {}): Stored {
   return {
@@ -102,6 +108,8 @@ beforeEach(() => {
   state.rows = [sample()];
   state.audits = [];
   state.deletes = 0;
+  state.kbReads = 0;
+  clearApprovedKbCache();
 });
 
 describe("outreach KB edit permissions", () => {
@@ -143,6 +151,22 @@ describe("outreach KB edit permissions", () => {
     expect(state.rows[0]?.updatedById).toBe("user-1");
     expect(state.deletes).toBe(0);
     expect(state.audits.map((item) => item.action)).toEqual(["kb_archived"]);
+  });
+
+  it("clears the approved cache after an archive or a status change", async () => {
+    actor.role = "lead";
+    await loadApprovedKbEntries("org-1");
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(1);
+
+    await archiveOutreachKbEntry({ id: rowId });
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(2);
+
+    state.rows[0] = sample({ status: "approved" });
+    await updateOutreachKbEntry({ ...edit, status: "draft" });
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(3);
   });
 
   it("stores a new row as draft even when the request says approved", async () => {
