@@ -42,6 +42,62 @@ export function kbKindLabel(kind: string): string {
 /** Default editor choices. Pending stays available only when a row already has it. */
 export const KB_SIMPLE_STATUSES: KbStatusName[] = ["draft", "approved", "retired"];
 
+export function asPayloadRecord(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" && !Array.isArray(payload) ? { ...(payload as Record<string, unknown>) } : {};
+}
+
+/** Advanced JSON replaces the stored object. Plain claim fields are applied after that, so neither side is dropped. */
+export function mergeKbPayload(
+  fresh: unknown,
+  patch: {
+    payload?: Record<string, unknown>;
+    claim?: string;
+    safeToQuote?: boolean;
+    doNotQuote?: boolean;
+  },
+): Record<string, unknown> {
+  const base = patch.payload ? { ...patch.payload } : asPayloadRecord(fresh);
+  if (typeof patch.claim === "string") base.claim = patch.claim;
+  if (typeof patch.safeToQuote === "boolean") base.safeToQuote = patch.safeToQuote;
+  if (typeof patch.doNotQuote === "boolean") base.doNotQuote = patch.doNotQuote;
+  return base;
+}
+
+export type KbReaderView = {
+  title: string;
+  body: string;
+  status: string;
+  type: string;
+  lastEdited: string;
+  claim: string | null;
+  safeToQuote: boolean | null;
+  doNotQuote: boolean | null;
+};
+
+/** Fields a rep is allowed to see. The raw payload and Advanced columns stay on the server. */
+export function kbReaderView(input: {
+  title: string;
+  body: string;
+  status: KbStatusName;
+  kind: string;
+  updatedAt: Date;
+  updatedByName: string | null;
+  payload: unknown;
+}): KbReaderView {
+  const payload = asPayloadRecord(input.payload);
+  const when = formatKbWhen(input.updatedAt);
+  return {
+    title: input.title,
+    body: input.body,
+    status: KB_STATUS_LABEL[input.status],
+    type: kbKindLabel(input.kind),
+    lastEdited: input.updatedByName ? `${when} by ${input.updatedByName}` : when,
+    claim: typeof payload.claim === "string" ? payload.claim : null,
+    safeToQuote: typeof payload.safeToQuote === "boolean" ? payload.safeToQuote : null,
+    doNotQuote: typeof payload.doNotQuote === "boolean" ? payload.doNotQuote : null,
+  };
+}
+
 export function knowledgePayloadOnSave(
   original: Record<string, unknown>,
   plain: { claim?: string | null; safeToQuote?: boolean | null; doNotQuote?: boolean | null },

@@ -27,46 +27,52 @@ const { state } = vi.hoisted(() => ({
     audits: [] as { action: string }[],
     deletes: 0,
     kbReads: 0,
+    failAudit: false,
   },
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/server/auth", () => ({ requireUser: async () => actor }));
-vi.mock("@/server/db", () => ({
-  prisma: {
-    outreachKbEntry: {
-      findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
-        state.rows.find((row) => row.id === where.id && row.organizationId === where.organizationId) ?? null,
-      update: async ({ where, data }: { where: { id: string }; data: Partial<Stored> }) => {
-        const row = state.rows.find((item) => item.id === where.id);
-        if (!row) throw new Error("missing");
-        Object.assign(row, data);
-        return row;
-      },
-      create: async ({ data }: { data: Omit<Stored, "id"> & { id?: string } }) => {
-        const row = { id: "22222222-2222-4222-8222-222222222222", ...data } as Stored;
-        state.rows.push(row);
-        return row;
-      },
-      delete: async () => {
-        state.deletes += 1;
-      },
-      deleteMany: async () => {
-        state.deletes += 1;
-      },
-      findMany: async () => {
-        state.kbReads += 1;
-        return [];
-      },
+vi.mock("@/server/db", () => {
+  const outreachKbEntry = {
+    findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
+      state.rows.find((row) => row.id === where.id && row.organizationId === where.organizationId) ?? null,
+    update: async ({ where, data }: { where: { id: string }; data: Partial<Stored> }) => {
+      const row = state.rows.find((item) => item.id === where.id);
+      if (!row) throw new Error("missing");
+      Object.assign(row, data);
+      return row;
     },
-    auditLog: {
-      create: async ({ data }: { data: { action: string } }) => {
-        state.audits.push(data);
-        return data;
-      },
+    create: async ({ data }: { data: Omit<Stored, "id"> & { id?: string } }) => {
+      const row = { id: "22222222-2222-4222-8222-222222222222", ...data } as Stored;
+      state.rows.push(row);
+      return row;
     },
-  },
-}));
+    delete: async () => {
+      state.deletes += 1;
+    },
+    deleteMany: async () => {
+      state.deletes += 1;
+    },
+    findMany: async () => {
+      state.kbReads += 1;
+      return [];
+    },
+  };
+  return {
+    prisma: {
+      outreachKbEntry,
+      auditLog: {
+        create: async ({ data }: { data: { action: string } }) => {
+          if (state.failAudit) throw new Error("audit failed");
+          state.audits.push(data);
+          return data;
+        },
+      },
+      $transaction: async <T>(fn: (tx: { outreachKbEntry: typeof outreachKbEntry }) => Promise<T>) => fn({ outreachKbEntry }),
+    },
+  };
+});
 
 import { archiveOutreachKbEntry, createOutreachKbEntry, updateOutreachKbEntry } from "@/server/actions/outreachKb";
 import { clearApprovedKbCache, loadApprovedKbEntries } from "@/server/kb/load";
@@ -101,6 +107,7 @@ const edit = {
   kind: "principle",
   scope: "universal" as const,
   icp: null,
+  version: 1,
 };
 
 beforeEach(() => {
@@ -109,6 +116,7 @@ beforeEach(() => {
   state.audits = [];
   state.deletes = 0;
   state.kbReads = 0;
+  state.failAudit = false;
   clearApprovedKbCache();
 });
 
@@ -167,6 +175,66 @@ describe("outreach KB edit permissions", () => {
     await updateOutreachKbEntry({ ...edit, status: "draft" });
     await loadApprovedKbEntries("org-1");
     expect(state.kbReads).toBe(3);
+
+    await createOutreachKbEntry({ ...edit, key: "learning:cache-create" });
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(4);
+
+    const version = state.rows[0]?.version ?? 1;
+    await updateOutreachKbEntry({ ...edit, status: "draft", title: "Offer wording", version, payload: undefined });
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(5);
+  });
+
+  it("keeps a fresh payload when Advanced was not edited, rejects a stale save, and applies Advanced then plain fields", async () => {
+    actor.role = "lead";
+    state.rows[0] = sample({ payload: { tasks: ["write_outreach"], claim: "yes", note: "added later" } });
+    await updateOutreachKbEntry({ ...edit, status: "pending", title: "Offer", body: "Free for 1 week.", claim: "roadmap", payload: undefined });
+    expect(state.rows[0]?.payload).toEqual({ tasks: ["write_outreach"], claim: "roadmap", note: "added later" });
+
+    state.rows[0] = sample({ version: 4, title: "Current title", payload: { tasks: ["write_outreach"], claim: "yes" } });
+    await expect(updateOutreachKbEntry({ ...edit, version: 1, payload: undefined })).rejects.toThrow(
+      "This row was changed by someone else, reload to see it",
+    );
+    expect(state.rows[0]?.title).toBe("Current title");
+    expect(state.rows[0]?.payload).toEqual({ tasks: ["write_outreach"], claim: "yes" });
+
+    state.rows[0] = sample({ payload: { tasks: ["write_outreach"], claim: "yes", safeToQuote: false, drop: "me" } });
+    await updateOutreachKbEntry({
+      ...edit,
+      status: "pending",
+      payload: { tasks: ["score_leads"], note: "from advanced" },
+      claim: "commercial",
+      safeToQuote: true,
+    });
+    expect(state.rows[0]?.payload).toEqual({
+      tasks: ["score_leads"],
+      note: "from advanced",
+      claim: "commercial",
+      safeToQuote: true,
+    });
+  });
+
+  it("requires a confirm when Advanced turns locking on", async () => {
+    actor.role = "lead";
+    state.rows[0] = sample({ payload: { claim: "yes" } });
+    await expect(
+      updateOutreachKbEntry({ ...edit, payload: { claim: "yes", locked: true }, confirmLocked: false }),
+    ).rejects.toThrow("locked Product Truth");
+    expect(state.rows[0]?.payload).toEqual({ claim: "yes" });
+
+    await updateOutreachKbEntry({ ...edit, payload: { claim: "yes", locked: true }, confirmLocked: true });
+    expect(state.rows[0]?.payload).toMatchObject({ locked: true, claim: "yes" });
+  });
+
+  it("clears the approved cache even when the audit write throws", async () => {
+    actor.role = "lead";
+    await loadApprovedKbEntries("org-1");
+    state.failAudit = true;
+    await expect(updateOutreachKbEntry({ ...edit, title: "Saved anyway", payload: undefined })).rejects.toThrow("audit failed");
+    expect(state.rows[0]?.title).toBe("Saved anyway");
+    await loadApprovedKbEntries("org-1");
+    expect(state.kbReads).toBe(2);
   });
 
   it("stores a new row as draft even when the request says approved", async () => {

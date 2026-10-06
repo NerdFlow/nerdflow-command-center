@@ -25,6 +25,7 @@ export async function seedOutreachKb(prisma: PrismaClient, organizationId: strin
 
   if (plan.create.length > 0) {
     await prisma.outreachKbEntry.createMany({
+      skipDuplicates: true,
       data: plan.create.map((entry) => ({
         organizationId,
         layer: entry.layer,

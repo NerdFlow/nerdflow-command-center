@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kbKindLabel, knowledgePayloadOnSave } from "@/lib/outreachKb";
+import { formatKbWhen, kbKindLabel, kbReaderView, knowledgePayloadOnSave } from "@/lib/outreachKb";
 
 describe("knowledgePayloadOnSave", () => {
   const original = { claim: "yes", locked: true, tasks: ["write_outreach"], safeToQuote: false };
@@ -25,6 +25,36 @@ describe("knowledgePayloadOnSave", () => {
   it("rejects technical fields that are not an object", () => {
     expect(knowledgePayloadOnSave(original, {}, "not json").ok).toBe(false);
     expect(knowledgePayloadOnSave(original, {}, "[]").ok).toBe(false);
+  });
+});
+
+describe("kbReaderView", () => {
+  it("sends only the display fields and the plain claim values", () => {
+    const updatedAt = new Date("2026-10-05T12:00:00Z");
+    const view = kbReaderView({
+      title: "One-liner",
+      body: "ReceptAI is your after-hours ops layer.",
+      status: "approved",
+      kind: "product_truth",
+      updatedAt,
+      updatedByName: "Muqeet",
+      payload: { claim: "yes", safeToQuote: false, doNotQuote: true, locked: true, tasks: ["write_outreach"], secret: "hidden" },
+    });
+    expect(view).toEqual({
+      title: "One-liner",
+      body: "ReceptAI is your after-hours ops layer.",
+      status: "Approved",
+      type: "Product truth",
+      lastEdited: `${formatKbWhen(updatedAt)} by Muqeet`,
+      claim: "yes",
+      safeToQuote: false,
+      doNotQuote: true,
+    });
+    const packed = JSON.stringify(view);
+    expect(packed).not.toContain("write_outreach");
+    expect(packed).not.toContain("hidden");
+    expect(packed).not.toContain("locked");
+    expect(Object.keys(view).sort()).toEqual(["body", "claim", "doNotQuote", "lastEdited", "safeToQuote", "status", "title", "type"]);
   });
 });
 

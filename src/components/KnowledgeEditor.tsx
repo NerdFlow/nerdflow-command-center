@@ -34,6 +34,7 @@ export type KnowledgeEditorRow = {
   sourcePath: string | null;
   updatedLabel: string | null;
   updatedByName: string | null;
+  version?: number;
 };
 
 const inputClass = "w-full border border-rule rounded-lg px-3 py-2 bg-bg mt-1";
@@ -73,33 +74,42 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
     if (next.ok) setPayloadText(JSON.stringify(next.payload, null, 2));
   }, [advancedEdited, claim, doNotQuote, row.payload, safeToQuote]);
 
+  const advancedPayload = advancedEdited ? knowledgePayloadOnSave(row.payload, {}, payloadText) : null;
+  const needsLockConfirm = row.locked || (advancedPayload?.ok === true && advancedPayload.payload.locked === true);
+
   async function save() {
-    const payload = knowledgePayloadOnSave(row.payload, { claim, safeToQuote, doNotQuote }, advancedEdited ? payloadText : null);
-    if (!payload.ok) {
-      setError(payload.error);
+    if (advancedPayload && !advancedPayload.ok) {
+      setError(advancedPayload.error);
+      return;
+    }
+    if (!creating && row.version == null) {
+      setError("Reload this row before saving.");
       return;
     }
     setSaving(true);
     setError(null);
-    const common = {
+    const plain = {
       title,
       body,
-      payload: payload.payload,
       status: creating ? ("draft" as const) : status,
       layer,
       kind,
       scope,
       icp: scope === "icp" ? icp : null,
       confirmLocked,
+      ...(typeof claim === "string" ? { claim } : {}),
+      ...(typeof safeToQuote === "boolean" ? { safeToQuote } : {}),
+      ...(typeof doNotQuote === "boolean" ? { doNotQuote } : {}),
+      ...(advancedPayload?.ok ? { payload: advancedPayload.payload } : {}),
     };
     try {
       if (creating) {
-        const saved = await createOutreachKbEntry({ ...common, key: key.trim() || keyFromTitle(kind, title), status: "draft" });
+        const saved = await createOutreachKbEntry({ ...plain, key: key.trim() || keyFromTitle(kind, title), status: "draft" });
         toast("Row added.");
         router.push(`/knowledge/${saved.id}`);
         router.refresh();
       } else {
-        await updateOutreachKbEntry({ ...common, id: row.id! });
+        await updateOutreachKbEntry({ ...plain, id: row.id!, version: row.version! });
         toast("Saved.");
         setConfirmLocked(false);
         setAdvancedEdited(false);
@@ -130,7 +140,7 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
 
   return (
     <div className="space-y-4 max-w-2xl">
-      {row.locked && (
+      {needsLockConfirm && (
         <Panel className="border-warm/40 bg-warm-soft">
           <p className="text-sm font-medium m-0">Locked product truth</p>
           <p className="text-sm text-muted mt-1 mb-0">Cold emails use this wording. Tick the box before you save.</p>
@@ -233,7 +243,7 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
           {row.updatedLabel ? ` · ${row.updatedLabel}` : ""}
         </p>
 
-        {canEdit && row.locked && (
+        {canEdit && needsLockConfirm && (
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={confirmLocked} onChange={(e) => setConfirmLocked(e.target.checked)} />
             <span>I mean to change this locked product truth. Cold copy will follow the new wording.</span>
@@ -244,11 +254,11 @@ export function KnowledgeEditor({ row, canEdit }: { row: KnowledgeEditorRow; can
 
         {canEdit ? (
           <div className="flex flex-wrap gap-2">
-            <Btn variant="primary" loading={saving} disabled={row.locked && !confirmLocked} onClick={() => void save()}>
+            <Btn variant="primary" loading={saving} disabled={needsLockConfirm && !confirmLocked} onClick={() => void save()}>
               {creating ? "Add row" : "Save"}
             </Btn>
             {!creating && status !== "retired" && (
-              <Btn variant="stop" loading={saving} disabled={row.locked && !confirmLocked} onClick={() => void archive()}>
+              <Btn variant="stop" loading={saving} disabled={needsLockConfirm && !confirmLocked} onClick={() => void archive()}>
                 Archive
               </Btn>
             )}
