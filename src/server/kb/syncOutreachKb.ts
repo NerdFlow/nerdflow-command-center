@@ -6,37 +6,16 @@ export const NERDFLOW_ORG_NAME = "NerdFlow";
 
 export type OrgChoice = { id: string; name: string };
 
-export type ExistingKbRow = {
-  key: string;
-  status: string;
-  updatedById: string | null;
-  layer: string;
-  kind: string;
-  icp: string | null;
-  scope: string;
-  title: string;
-  body: string;
-  payload: unknown;
-  sourcePath: string;
-  sourceLink: string | null;
-  version: number;
-};
+export type ExistingKbRow = { key: string };
 
 export type OutreachKbLoadResult = {
-  loaded: number;
   created: number;
-  updated: number;
-  unchanged: number;
-  statusKept: number;
-  left: number;
+  skipped: number;
 };
 
 export type KbSyncPlan = {
   create: KbSeedEntry[];
-  update: { key: string; entry: KbSeedEntry }[];
-  unchanged: number;
-  statusKept: number;
-  left: number;
+  skipped: number;
 };
 
 /**
@@ -68,48 +47,29 @@ export function chooseOutreachKbOrg(orgs: OrgChoice[]): { ok: true; org: OrgChoi
 }
 
 /**
- * Upsert plan. Existing status is kept so an in-app approval survives the next deploy.
- * Rows that are not in the markdown (manual edits, future learnings) are left in place.
- * Markdown title, body, and the other content fields still replace the stored copy.
+ * Insert-only. The database is the source of truth after the first import.
+ * An existing key is skipped entirely: title, body, payload, and status stay as saved.
+ * Keys that are only in the database are not deleted.
  */
 export function planOutreachKbSync(existing: ExistingKbRow[], incoming: KbSeedEntry[]): KbSyncPlan {
+  const keys = new Set(existing.map((row) => row.key));
   const incomingByKey = new Map<string, KbSeedEntry>();
   for (const entry of incoming) incomingByKey.set(entry.key, entry);
-  const byKey = new Map(existing.map((row) => [row.key, row]));
   const create: KbSeedEntry[] = [];
-  const update: { key: string; entry: KbSeedEntry }[] = [];
-  let unchanged = 0;
-  let statusKept = 0;
+  let skipped = 0;
   for (const entry of incomingByKey.values()) {
-    const row = byKey.get(entry.key);
-    if (!row) {
-      create.push(entry);
-      continue;
-    }
-    if (row.status !== entry.status) statusKept += 1;
-    if (sameContent(row, entry)) {
-      unchanged += 1;
-      continue;
-    }
-    update.push({ key: entry.key, entry });
+    if (keys.has(entry.key)) skipped += 1;
+    else create.push(entry);
   }
-  const left = existing.filter((row) => !incomingByKey.has(row.key)).length;
-  return { create, update, unchanged, statusKept, left };
+  return { create, skipped };
 }
 
-export function outreachKbLoadResult(plan: KbSyncPlan): OutreachKbLoadResult {
-  return {
-    loaded: plan.create.length + plan.update.length + plan.unchanged,
-    created: plan.create.length,
-    updated: plan.update.length,
-    unchanged: plan.unchanged,
-    statusKept: plan.statusKept,
-    left: plan.left,
-  };
+export function outreachKbLoadResult(plan: KbSyncPlan, inserted = plan.create.length): OutreachKbLoadResult {
+  return { created: inserted, skipped: plan.skipped + (plan.create.length - inserted) };
 }
 
 export function formatOutreachKbLoadLine(org: OrgChoice, result: OutreachKbLoadResult): string {
-  return `Outreach knowledge base loaded: ${result.loaded} rows for ${org.name} (${org.id}) (created ${result.created}, updated ${result.updated}, unchanged ${result.unchanged}, status kept ${result.statusKept}, left in place ${result.left})`;
+  return `Outreach knowledge base loaded: created ${result.created}, skipped existing ${result.skipped} for ${org.name} (${org.id})`;
 }
 
 /** One connection, so this short script does not take the app's pool during deploy. */
@@ -120,35 +80,3 @@ export function databaseUrlForKbLoad(url: string): string {
   return `${trimmed}${trimmed.includes("?") ? "&" : "?"}connection_limit=1`;
 }
 
-function sameContent(existing: ExistingKbRow, entry: KbSeedEntry): boolean {
-  return (
-    existing.layer === entry.layer &&
-    existing.kind === entry.kind &&
-    (existing.icp ?? null) === (entry.icp ?? null) &&
-    existing.scope === entry.scope &&
-    existing.title === entry.title &&
-    existing.body === entry.body &&
-    existing.sourcePath === entry.sourcePath &&
-    (existing.sourceLink ?? null) === (entry.sourceLink ?? null) &&
-    existing.version === entry.version &&
-    stable(existing.payload) === stable(entry.payload)
-  );
-}
-
-function stable(value: unknown): string {
-  return JSON.stringify(sortValue(value));
-}
-
-function sortValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortValue);
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.keys(record)
-      .sort()
-      .reduce<Record<string, unknown>>((acc, key) => {
-        acc[key] = sortValue(record[key]);
-        return acc;
-      }, {});
-  }
-  return value ?? null;
-}
