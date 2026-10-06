@@ -27,7 +27,7 @@ export function Btn({
   loading?: boolean;
 }) {
   const base =
-    "border rounded-xl font-medium disabled:opacity-55 disabled:cursor-default transition-all duration-150 inline-flex items-center justify-center gap-1.5 active:scale-[0.97] active:brightness-95";
+    "border rounded-xl font-medium transition-all duration-150 inline-flex items-center justify-center gap-1.5 active:scale-[0.97] active:brightness-95";
   const sizes =
     size === "lg"
       ? "px-5 py-3 text-[15px]"
@@ -42,8 +42,11 @@ export function Btn({
     urgent: "bg-stop-soft border-stop/50 text-stop font-semibold hover:border-stop",
     ghost: "bg-transparent border-transparent text-muted hover:bg-panel2 hover:text-ink",
   };
+  // After the variant on purpose. disabled: and disabled:hover: beat a primary hover fill.
+  const disabledLook =
+    "disabled:cursor-not-allowed disabled:border-rule disabled:bg-panel disabled:text-muted disabled:opacity-40 disabled:hover:border-rule disabled:hover:bg-panel disabled:hover:text-muted disabled:hover:opacity-40 disabled:active:scale-100 disabled:active:brightness-100";
   return (
-    <button className={cx(base, sizes, variants[variant], className)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>
+    <button className={cx(base, sizes, variants[variant], className, disabledLook)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>
       {loading && (
         <svg className="btn-spinner shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
           <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />

@@ -1,7 +1,5 @@
+import { focusActionClass } from "@/lib/focusActionClass";
 import type { TitanOpenState } from "@/lib/titanOpen";
-
-const linkClass =
-  "inline-flex items-center justify-center bg-accent text-on-accent font-semibold px-5 py-3 rounded-xl text-[15px] hover:bg-accent-hover";
 
 /** Visible whenever the card has an email. Disabled, never removed, when send is blocked or the draft is empty. */
 export function OpenInTitan({ state }: { state: TitanOpenState }) {
@@ -10,11 +8,11 @@ export function OpenInTitan({ state }: { state: TitanOpenState }) {
   return (
     <>
       {state.enabled && state.href ? (
-        <a href={state.href} className={linkClass}>
+        <a href={state.href} className={focusActionClass({ tone: "primary", disabled: false })}>
           Open in Titan
         </a>
       ) : (
-        <button type="button" disabled title={note.join("\n") || undefined} className={`${linkClass} disabled:opacity-40`}>
+        <button type="button" disabled title={note.join("\n") || undefined} className={focusActionClass({ tone: "primary", disabled: true })}>
           Open in Titan
         </button>
       )}

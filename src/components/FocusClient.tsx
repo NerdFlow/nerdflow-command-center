@@ -14,7 +14,10 @@ import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
 import { LogReplyDialog } from "@/components/LogReplyDialog";
 import { OpenInTitan } from "@/components/OpenInTitan";
+import { FocusQueueMenu } from "@/components/FocusQueueMenu";
 import { ShapeASession } from "@/components/ShapeASession";
+import { focusActionClass } from "@/lib/focusActionClass";
+import { commitQueueJump, promoteQueueItem } from "@/lib/focusJump";
 import { titanOpenState } from "@/lib/titanOpen";
 import { TodaySyncPanel } from "@/components/TodaySyncPanel";
 import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
@@ -157,6 +160,7 @@ export function FocusClient({
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => initialCards.flatMap((card) => followUpKeysFromSignals(card.lead.signals)));
   const [deferredKeys, setDeferredKeys] = useState<string[]>(() => initialCards.flatMap((card) => skipKeysFromSignals(card.lead.signals)));
   const [pinnedKeys, setPinnedKeys] = useState<string[]>([]);
+  const [jumpedKey, setJumpedKey] = useState<string | null>(null);
   const [coachOpen, setCoachOpen] = useState(false);
   const shapeInFlight = useRef(new Set<string>());
   const [channelFilter, setChannelFilter] = useState<Channel | "all">(() => {
@@ -250,10 +254,11 @@ export function FocusClient({
 
   const shapeCounts = useMemo(() => pickerCounts(shapeRows.map((row) => row.action)), [shapeRows]);
 
-  const visibleCards = useMemo(
-    () => selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone),
-    [cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone],
-  );
+  const visibleCards = useMemo(() => {
+    const selected = selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone);
+    if (channelFilter !== "call") return selected;
+    return promoteQueueItem(selected, jumpedKey, (card) => card.lead.id);
+  }, [cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone, jumpedKey]);
 
   const sourcesPresent = useMemo(() => {
     const set = new Set<LeadSource>();
@@ -410,7 +415,11 @@ export function FocusClient({
   }
 
   function shapeRowsFor(filter: Channel | "all") {
-    return shapeRows.filter((row) => actionVisible(row.action, filter));
+    return promoteQueueItem(
+      shapeRows.filter((row) => actionVisible(row.action, filter)),
+      jumpedKey,
+      (row) => row.action.key,
+    );
   }
 
   function settlePipeline(
@@ -423,6 +432,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     if (outcome !== "skip") setTouchesLogged((n) => n + 1);
@@ -452,6 +462,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     void skipFocusCard({
@@ -483,6 +494,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     setTouchesLogged((n) => n + 1);
@@ -516,6 +528,7 @@ export function FocusClient({
     const key = row.action.key;
     if (shapeInFlight.current.has(key)) return;
     shapeInFlight.current.add(key);
+    setJumpedKey(null);
     setHiddenKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
     setError(null);
     setTouchesLogged((n) => n + 1);
@@ -561,6 +574,7 @@ export function FocusClient({
     const key = row.action.key;
     const leadId = row.card.lead.id;
     if (!startOptimisticOutcome(inFlight.current, key)) return;
+    setJumpedKey(null);
     const terminal = outcome === "not_fit" || outcome === "wrong_number";
     const siblingKeys = shapeRows.filter((item) => item.card.lead.id === leadId).map((item) => item.action.key);
     setHiddenKeys((prev) => Array.from(new Set([...prev, ...(terminal ? siblingKeys : [key])])));
@@ -597,6 +611,7 @@ export function FocusClient({
     const card = current;
     const leadId = card.lead.id;
     if (!startOptimisticOutcome(inFlight.current, leadId)) return;
+    setJumpedKey(null);
 
     const note = channel === "call" ? normalizeCallerNote(callNote) : null;
     const scriptUsed = opener.variant;
@@ -860,6 +875,7 @@ export function FocusClient({
           }
           outreach={{ ...outreach, drafts, usedToday, repEmail }}
           onGenerateDraft={onGenerateDraft}
+          onJump={(key) => commitQueueJump(key, setJumpedKey)}
         />
         {replyDialog}
         {coachOpen && (
@@ -895,6 +911,15 @@ export function FocusClient({
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0 z-10">
       <div className="flex items-center gap-3">
         <span className="text-sm font-semibold">{sessionTitle}</span>
+        <FocusQueueMenu
+          items={visibleCards.map((card) => ({
+            key: card.lead.id,
+            label: card.lead.businessName,
+            detail: card.lead.city,
+          }))}
+          activeKey={current?.lead.id ?? null}
+          onJump={(key) => commitQueueJump(key, setJumpedKey)}
+        />
         {mins !== null && (
           <span className="text-xs tabular-nums text-dim bg-panel2 px-2 py-1 rounded-md">
             {mins}:{secs}
@@ -1023,11 +1048,7 @@ export function FocusClient({
 
           {channel === "email" && (
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={copy}
-                className="inline-flex items-center justify-center border border-rule font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40"
-              >
+              <button type="button" onClick={copy} className={focusActionClass({ tone: "quiet", disabled: false })}>
                 {copied ? "Copied" : "Copy draft"}
               </button>
               {current.lead.email ? <OpenInTitan state={titan} /> : <p className="text-sm text-stop m-0">No email on file.</p>}
@@ -1146,6 +1167,7 @@ export function FocusClient({
           onCancel={() => setCallSkipOpen(false)}
           onConfirm={(detail) => {
             setCallSkipOpen(false);
+            setJumpedKey(null);
             const rowId = current.pipeline?.rowId ?? null;
             const key = rowId ? `pipeline:${rowId}` : todayActionKey(current.lead.id, "call");
             void skipFocusCard({
