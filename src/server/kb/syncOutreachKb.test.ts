@@ -28,23 +28,7 @@ function entry(overrides: Partial<KbSeedEntry> = {}): KbSeedEntry {
 }
 
 function row(overrides: Partial<ExistingKbRow> = {}): ExistingKbRow {
-  const seed = entry();
-  return {
-    key: seed.key,
-    status: "approved",
-    updatedById: "user-1",
-    layer: seed.layer,
-    kind: seed.kind,
-    icp: seed.icp,
-    scope: seed.scope,
-    title: seed.title,
-    body: seed.body,
-    payload: seed.payload,
-    sourcePath: seed.sourcePath,
-    sourceLink: seed.sourceLink,
-    version: seed.version,
-    ...overrides,
-  };
+  return { key: "principle:offer", ...overrides };
 }
 
 describe("chooseOutreachKbOrg", () => {
@@ -77,49 +61,29 @@ describe("chooseOutreachKbOrg", () => {
 });
 
 describe("planOutreachKbSync", () => {
-  it("creates missing rows and keeps an approved status when the markdown changes", () => {
+  it("inserts only keys that are not already stored", () => {
     const plan = planOutreachKbSync(
-      [row({ status: "approved", body: "Old body." })],
-      [entry({ status: "pending", body: "Free for 1 week." })],
+      [row({ key: "principle:offer" })],
+      [entry({ status: "pending", body: "Markdown copy." }), entry({ key: "learning:new", title: "New", body: "Fresh." })],
+    );
+    expect(plan.skipped).toBe(1);
+    expect(plan.create.map((item) => item.key)).toEqual(["learning:new"]);
+    expect(plan.create[0]?.body).toBe("Fresh.");
+  });
+
+  it("does not plan an update or a delete when markdown and the database disagree", () => {
+    const plan = planOutreachKbSync(
+      [row(), { key: "learning:week-12" }],
+      [entry({ body: "File copy", status: "approved" })],
     );
     expect(plan.create).toEqual([]);
-    expect(plan.update).toHaveLength(1);
-    expect(plan.update[0]?.entry.body).toBe("Free for 1 week.");
-    expect(plan.statusKept).toBe(1);
-    expect(plan.unchanged).toBe(0);
+    expect(plan.skipped).toBe(1);
+    expect("update" in plan).toBe(false);
   });
 
-  it("does not write when the markdown matches, and still counts a kept status", () => {
-    const plan = planOutreachKbSync([row({ status: "approved" })], [entry({ status: "pending" })]);
-    expect(plan.update).toEqual([]);
-    expect(plan.unchanged).toBe(1);
-    expect(plan.statusKept).toBe(1);
-  });
-
-  it("leaves rows that are not in the markdown, including a later learning", () => {
-    const learning = row({
-      key: "learning:week-12",
-      status: "approved",
-      updatedById: null,
-      kind: "learning",
-      sourcePath: "outreach-kb/11-learnings.md",
-      body: "Owners who heard the summary booked a call.",
-    });
-    const plan = planOutreachKbSync([learning, row()], [entry()]);
-    expect(plan.left).toBe(1);
-    expect(plan.create).toEqual([]);
-    expect(plan.update).toEqual([]);
-    expect(plan.unchanged).toBe(1);
-  });
-
-  it("formats the deploy log line with the loaded count", () => {
-    const line = formatOutreachKbLoadLine(
-      { id: "prod-org", name: "NerdFlow" },
-      { loaded: 353, created: 353, updated: 0, unchanged: 0, statusKept: 0, left: 0 },
-    );
-    expect(line).toBe(
-      "Outreach knowledge base loaded: 353 rows for NerdFlow (prod-org) (created 353, updated 0, unchanged 0, status kept 0, left in place 0)",
-    );
+  it("formats the deploy log line with created and skipped counts", () => {
+    const line = formatOutreachKbLoadLine({ id: "prod-org", name: "NerdFlow" }, { created: 0, skipped: 353 });
+    expect(line).toBe("Outreach knowledge base loaded: created 0, skipped existing 353 for NerdFlow (prod-org)");
   });
 });
 

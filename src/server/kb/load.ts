@@ -73,7 +73,7 @@ export async function loadOutreachForFocus(organizationId: string, userId: strin
   };
 }
 
-/** No in-app writer changes KB status on this branch, so a save elsewhere is visible within this window. */
+/** Knowledge saves call clearApprovedKbCache. The window still covers a batch of cards. */
 const APPROVED_KB_CACHE_MS = 60_000;
 
 const approvedKbCache = new Map<string, { at: number; entries: KbContextRow[] }>();
