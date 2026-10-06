@@ -14,7 +14,10 @@ import { resolveLeadChannel, splitEmailDraft } from "@/server/cadence";
 import { FlowCoach } from "@/components/FlowCoach";
 import { LogReplyDialog } from "@/components/LogReplyDialog";
 import { OpenInTitan } from "@/components/OpenInTitan";
+import { FocusQueueMenu } from "@/components/FocusQueueMenu";
 import { ShapeASession } from "@/components/ShapeASession";
+import { focusActionClass } from "@/lib/focusActionClass";
+import { promoteQueueItem } from "@/lib/focusJump";
 import { titanOpenState } from "@/lib/titanOpen";
 import { TodaySyncPanel } from "@/components/TodaySyncPanel";
 import type { CoachDirectoryLead, ShapeCard } from "@/lib/shapeCard";
@@ -157,6 +160,7 @@ export function FocusClient({
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => initialCards.flatMap((card) => followUpKeysFromSignals(card.lead.signals)));
   const [deferredKeys, setDeferredKeys] = useState<string[]>(() => initialCards.flatMap((card) => skipKeysFromSignals(card.lead.signals)));
   const [pinnedKeys, setPinnedKeys] = useState<string[]>([]);
+  const [jumpedKey, setJumpedKey] = useState<string | null>(null);
   const [coachOpen, setCoachOpen] = useState(false);
   const shapeInFlight = useRef(new Set<string>());
   const [channelFilter, setChannelFilter] = useState<Channel | "all">(() => {
@@ -250,10 +254,11 @@ export function FocusClient({
 
   const shapeCounts = useMemo(() => pickerCounts(shapeRows.map((row) => row.action)), [shapeRows]);
 
-  const visibleCards = useMemo(
-    () => selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone),
-    [cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone],
-  );
+  const visibleCards = useMemo(() => {
+    const selected = selectFocusCards(cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone);
+    if (channelFilter !== "call") return selected;
+    return promoteQueueItem(selected, jumpedKey, (card) => card.lead.id);
+  }, [cards, channelFilter, sourceFilter, businessHoursOnly, repTimezone, jumpedKey]);
 
   const sourcesPresent = useMemo(() => {
     const set = new Set<LeadSource>();
@@ -410,7 +415,11 @@ export function FocusClient({
   }
 
   function shapeRowsFor(filter: Channel | "all") {
-    return shapeRows.filter((row) => actionVisible(row.action, filter));
+    return promoteQueueItem(
+      shapeRows.filter((row) => actionVisible(row.action, filter)),
+      jumpedKey,
+      (row) => row.action.key,
+    );
   }
 
   function settlePipeline(
@@ -860,6 +869,7 @@ export function FocusClient({
           }
           outreach={{ ...outreach, drafts, usedToday, repEmail }}
           onGenerateDraft={onGenerateDraft}
+          onJump={setJumpedKey}
         />
         {replyDialog}
         {coachOpen && (
@@ -895,6 +905,15 @@ export function FocusClient({
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0 z-10">
       <div className="flex items-center gap-3">
         <span className="text-sm font-semibold">{sessionTitle}</span>
+        <FocusQueueMenu
+          items={visibleCards.map((card) => ({
+            key: card.lead.id,
+            label: card.lead.businessName,
+            detail: card.lead.city,
+          }))}
+          activeKey={current?.lead.id ?? null}
+          onJump={setJumpedKey}
+        />
         {mins !== null && (
           <span className="text-xs tabular-nums text-dim bg-panel2 px-2 py-1 rounded-md">
             {mins}:{secs}
@@ -1023,11 +1042,7 @@ export function FocusClient({
 
           {channel === "email" && (
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={copy}
-                className="inline-flex items-center justify-center border border-rule font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40"
-              >
+              <button type="button" onClick={copy} className={focusActionClass({ tone: "quiet", disabled: false })}>
                 {copied ? "Copied" : "Copy draft"}
               </button>
               {current.lead.email ? <OpenInTitan state={titan} /> : <p className="text-sm text-stop m-0">No email on file.</p>}

@@ -19,8 +19,10 @@ import {
 } from "@/lib/todayCards";
 import type { ShapeCard } from "@/lib/shapeCard";
 import { SkipReasonSheet, type SkipDetail } from "@/components/SkipReasonSheet";
+import { FocusQueueMenu } from "@/components/FocusQueueMenu";
 import { OpenInTitan } from "@/components/OpenInTitan";
 import { OutreachDraftPanel, reviewOutreachCopy } from "@/components/OutreachDraftPanel";
+import { focusActionClass } from "@/lib/focusActionClass";
 import { titanOpenState } from "@/lib/titanOpen";
 import { checklistApplies, firstHttpUrl } from "@/lib/outreachChecklist";
 import { sendingMailbox, type MailboxSignatureMap } from "@/lib/mailboxSignature";
@@ -92,6 +94,7 @@ export function ShapeASession({
   onLogReply,
   outreach,
   onGenerateDraft,
+  onJump,
 }: {
   rows: Row[];
   me: string;
@@ -118,6 +121,7 @@ export function ShapeASession({
   onLogReply: (row: Row) => void;
   outreach: OutreachSessionProps;
   onGenerateDraft: (row: Row, mode: "generate" | "regenerate") => Promise<OutreachDraftCopy | null>;
+  onJump: (key: string) => void;
 }) {
   const current = rows[0];
   const [copied, setCopied] = useState(false);
@@ -276,8 +280,19 @@ export function ShapeASession({
     : "Today";
 
   const topBar = (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0">
-      <span className="text-sm font-semibold">{header}</span>
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-3 bg-panel/90 backdrop-blur-sm border-b border-rule shrink-0 z-10">
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-semibold">{header}</span>
+        <FocusQueueMenu
+          items={rows.map((row) => ({
+            key: row.action.key,
+            label: row.card.lead.businessName,
+            detail: actionKicker(row.action.kind, row.card.pipeline?.actionLabel),
+          }))}
+          activeKey={current?.action.key ?? null}
+          onJump={onJump}
+        />
+      </div>
       <div className="flex items-center gap-3 md:gap-4 flex-wrap">
         {mins !== null && <span className="text-xs tabular-nums text-dim bg-panel2 px-2 py-1 rounded-md">{mins}:{secs}</span>}
         {showHours && (
@@ -484,7 +499,7 @@ export function ShapeASession({
           {kind !== "call" && kind !== "linkedin_request" && (
             <div className="flex flex-wrap items-center gap-2">
               {draftText && (
-                <button type="button" onClick={copy} disabled={sendBlocked} className="inline-flex items-center justify-center border border-rule bg-panel font-semibold px-5 py-3 rounded-xl text-[15px] hover:border-accent/40 disabled:opacity-40">
+                <button type="button" onClick={copy} disabled={sendBlocked} className={focusActionClass({ tone: "quiet", disabled: sendBlocked })}>
                   {copied ? "Copied" : pipeline ? "Copy" : "Copy draft"}
                 </button>
               )}
@@ -665,7 +680,7 @@ export function ShapeASession({
                     openerSourceUrl: openerUrl.trim() || null,
                   })
                 }
-                className="bg-accent text-on-accent font-semibold px-4 py-2 rounded-xl text-sm disabled:opacity-40"
+                className={focusActionClass({ tone: "primary", disabled: sendBlocked, size: "sm" })}
               >
                 Done
               </button>
